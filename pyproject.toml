@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquinas-toolkit"
+version = "0.1.0"
+description = "Toolkit for the EWSHM 2026 AQUINAS structural health monitoring competition"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    "jupyter",
+    "jupyterlab",
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+aquinas = "aquinas_toolkit.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.setuptools.packages.find]
+include = ["aquinas_toolkit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

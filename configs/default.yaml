@@ -1,0 +1,64 @@
+# =============================================================================
+# AQUINAS Toolkit -- Default Pipeline Configuration
+# =============================================================================
+#
+# This file is the active workspace configuration for the pipeline.
+# New runs snapshot it into results/<run_id>/config.yaml so that later
+# stages resume with exactly the same settings even if this file changes.
+#
+# If you want to keep config variants, store them alongside this file
+# and copy the desired variant over configs/default.yaml before starting
+# a new run.
+#
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Data paths and dataset selection
+# ---------------------------------------------------------------------------
+data:
+  dataset_root: AQUINAS_DATASET          # relative to repo root
+  sets:                                   # which monthly datasets to use
+    - AQUINAS_SET1_2022_07               # July 2022
+    - AQUINAS_SET2_2023_04               # April 2023
+    - AQUINAS_SET3_2023_08               # August 2023
+    - AQUINAS_SET4_2024_01               # January 2024
+    - AQUINAS_SET5_2024_06               # June 2024
+
+# ---------------------------------------------------------------------------
+# Preprocessing  (TODO -- uncomment and fill in when implemented)
+# ---------------------------------------------------------------------------
+# preprocessing:
+#   baseline_removal: true
+#   bandpass_filter:
+#     low_hz: 0.5
+#     high_hz: 45.0
+#   temperature_normalisation: true
+
+# ---------------------------------------------------------------------------
+# Feature extraction  (TODO)
+# ---------------------------------------------------------------------------
+# features:
+#   time_domain: [rms, peak_to_peak, kurtosis, skewness]
+#   freq_domain: [dominant_freq, spectral_centroid]
+#   use_index_table_features: true
+
+# ---------------------------------------------------------------------------
+# Unsupervised model  (TODO)
+# ---------------------------------------------------------------------------
+# model:
+#   type: pca             # pca | isolation_forest | autoencoder
+#   n_components: 10
+#   contamination: auto
+
+# ---------------------------------------------------------------------------
+# Health scoring  (TODO)
+# ---------------------------------------------------------------------------
+# scoring:
+#   aggregation: weighted_mean
+#   trend_window_months: 3
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  results_dir: results
