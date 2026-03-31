@@ -53,7 +53,7 @@ class AquinasReader:
         if not self.table_files:
             raise FileNotFoundError(
                 f"No TABLE_*.json found in {self.dataset_dir}. "
-                f"Please confirm this is an AQUINAS_SET folder."
+                "Please confirm this is an AQUINAS_SET folder."
             )
 
         self.set_name = self.dataset_dir.name
