@@ -121,10 +121,12 @@ Download the AQUINAS dataset and extract it so the folder structure is:
 
 ```
 AQUINAS_DATASET/
+├── README.md
 ├── AQUINAS_SET1_2022_07/
 ├── AQUINAS_SET2_2023_04/
-├── ...
-└── README.md
+├── AQUINAS_SET3_2023_08/
+├── AQUINAS_SET4_2024_01/
+└── AQUINAS_SET5_2024_06/
 ```
 
 ### 3. Explore

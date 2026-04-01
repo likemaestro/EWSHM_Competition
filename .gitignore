@@ -179,7 +179,8 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-/AQUINAS_DATASET
+/AQUINAS_DATASET/*
+!/AQUINAS_DATASET/README.md
 
 # Project outputs (keep the directory, ignore the contents)
 /results/*
