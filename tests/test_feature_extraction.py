@@ -1,6 +1,8 @@
 import numpy as np
+import pandas as pd
 
 from aquinas_toolkit.feature_extraction import (
+    annotate_mode_shape_locations,
     frequency_domain_decomposition,
     summarize_fdd_mode_shapes,
     summarize_fdd_peaks,
@@ -80,3 +82,31 @@ def test_summarize_fdd_mode_shapes_reports_normalized_components() -> None:
     assert set(mode_shape_table["channel"]) == {"ch1", "ch2", "ch3"}
     peak_groups = mode_shape_table.groupby("peak_rank")["mode_shape_amplitude"].max().tolist()
     assert all(np.isclose(value, 1.0) for value in peak_groups)
+    signed_groups = mode_shape_table.groupby("peak_rank")["mode_shape_signed_component"].apply(
+        lambda values: np.max(np.abs(values.to_numpy()))
+    )
+    assert all(np.isclose(value, 1.0) for value in signed_groups)
+
+
+def test_annotate_mode_shape_locations_extracts_structural_position_fields() -> None:
+    mode_shape_table = pd.DataFrame(
+        {
+            "peak_rank": [1, 1],
+            "frequency_hz": [3.2, 3.2],
+            "singular_value": [1.0, 1.0],
+            "channel": ["OLD_S1_DO_INT_ACC_Z", "NEW_S2_UP_MID_ACC_Z"],
+            "mode_shape_amplitude": [1.0, 0.8],
+            "mode_shape_signed_component": [1.0, -0.8],
+            "mode_shape_phase_deg": [0.0, 180.0],
+        }
+    )
+
+    annotated = annotate_mode_shape_locations(mode_shape_table)
+
+    assert list(annotated["deck"]) == ["OLD", "NEW"]
+    assert list(annotated["span"]) == ["S1", "S2"]
+    assert list(annotated["side"]) == ["DO", "UP"]
+    assert list(annotated["location"]) == ["INT", "MID"]
+    assert list(annotated["quantity"]) == ["ACC", "ACC"]
+    assert list(annotated["axis"]) == ["Z", "Z"]
+    assert list(annotated["position_label"]) == ["S1_DO_INT", "S2_UP_MID"]

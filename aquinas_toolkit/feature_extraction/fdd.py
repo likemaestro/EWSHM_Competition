@@ -129,16 +129,28 @@ def summarize_fdd_mode_shapes(
     rows: list[dict[str, object]] = []
     for peak_rank, peak in enumerate(peak_table.itertuples(index=False), start=1):
         vector = mode_shapes[peak.frequency_index, :, 0]
+        reference_index = int(np.argmax(np.abs(vector)))
+        aligned_vector = vector * np.exp(-1j * np.angle(vector[reference_index]))
         amplitudes = np.abs(vector)
         max_amplitude = np.max(amplitudes)
         if max_amplitude == 0:
             normalized = amplitudes
         else:
             normalized = amplitudes / max_amplitude
-        phases_deg = np.rad2deg(np.angle(vector))
+        signed_components = np.real(aligned_vector)
+        max_component = np.max(np.abs(signed_components))
+        if max_component == 0:
+            normalized_signed_components = signed_components
+        else:
+            normalized_signed_components = signed_components / max_component
+        phases_deg = np.rad2deg(np.angle(aligned_vector))
 
-        for channel_name, amplitude, phase_deg in zip(
-            channel_names, normalized, phases_deg, strict=True
+        for channel_name, amplitude, signed_component, phase_deg in zip(
+            channel_names,
+            normalized,
+            normalized_signed_components,
+            phases_deg,
+            strict=True,
         ):
             rows.append(
                 {
@@ -147,12 +159,30 @@ def summarize_fdd_mode_shapes(
                     "singular_value": peak.singular_value,
                     "channel": channel_name,
                     "mode_shape_amplitude": float(amplitude),
+                    "mode_shape_signed_component": float(signed_component),
                     "mode_shape_phase_deg": float(phase_deg),
                 }
             )
 
     mode_shape_table = pd.DataFrame(rows)
     return peak_table, mode_shape_table
+
+
+def annotate_mode_shape_locations(mode_shape_table: pd.DataFrame) -> pd.DataFrame:
+    """Attach structural position fields parsed from channel names.
+
+    The returned table preserves all original mode-shape columns and adds
+    ``deck``, ``span``, ``side``, ``location``, ``quantity``, ``axis``, and
+    a compact ``position_label`` for plotting.
+    """
+    if "channel" not in mode_shape_table.columns:
+        raise KeyError("mode_shape_table must contain a 'channel' column.")
+
+    annotated = mode_shape_table.copy()
+    parsed = annotated["channel"].apply(_parse_sensor_name).apply(pd.Series)
+    annotated = pd.concat([annotated, parsed], axis=1)
+    annotated["position_label"] = annotated[["span", "side", "location"]].agg("_".join, axis=1)
+    return annotated
 
 
 def _estimate_cross_spectral_density(
@@ -195,3 +225,18 @@ def _as_matrix(waveform_matrix: pd.DataFrame | np.ndarray) -> np.ndarray:
     if array.shape[1] < 2:
         raise ValueError("waveform_matrix must contain at least two channels for FDD.")
     return array
+
+
+def _parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
+    parts = sensor_name.split("_")
+    if len(parts) < 5:
+        raise ValueError(f"Unrecognized sensor name format: {sensor_name}")
+
+    return {
+        "deck": parts[0],
+        "span": parts[1],
+        "side": parts[2],
+        "location": parts[3],
+        "quantity": parts[4],
+        "axis": parts[5] if len(parts) > 5 else None,
+    }
