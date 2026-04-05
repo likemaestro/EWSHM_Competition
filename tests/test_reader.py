@@ -104,3 +104,45 @@ def test_load_all_index_tables_adds_sensor_and_dataset_columns(tmp_path: Path) -
         "NEW_S1_DO_MID_ACC_Z",
     }
     assert set(combined["dataset"]) == {"AQUINAS_SET1_2022_07"}
+
+
+def test_summarize_sensor_records_parses_sensor_metadata_and_counts(tmp_path: Path) -> None:
+    dataset_dir = _build_dataset(tmp_path)
+
+    reader = AquinasReader(dataset_dir)
+    summary = reader.summarize_sensor_records()
+
+    assert summary.to_dict("records") == [
+        {
+            "dataset": "AQUINAS_SET1_2022_07",
+            "sensor_name": "NEW_S1_DO_INF_STR",
+            "deck": "NEW",
+            "span": "S1",
+            "side": "DO",
+            "location": "INF",
+            "quantity": "STR",
+            "axis": None,
+            "record_count": 2,
+        },
+        {
+            "dataset": "AQUINAS_SET1_2022_07",
+            "sensor_name": "NEW_S1_DO_MID_ACC_Z",
+            "deck": "NEW",
+            "span": "S1",
+            "side": "DO",
+            "location": "MID",
+            "quantity": "ACC",
+            "axis": "Z",
+            "record_count": 1,
+        },
+    ]
+
+
+def test_summarize_sensor_records_supports_quantity_and_axis_filters(tmp_path: Path) -> None:
+    dataset_dir = _build_dataset(tmp_path)
+
+    reader = AquinasReader(dataset_dir)
+    summary = reader.summarize_sensor_records(quantity="acc", axis="z")
+
+    assert summary["sensor_name"].tolist() == ["NEW_S1_DO_MID_ACC_Z"]
+    assert summary["record_count"].tolist() == [1]
