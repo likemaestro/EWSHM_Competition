@@ -163,7 +163,11 @@ def read_latest_pointer(results_dir: Path) -> dict[str, Any]:
             f"No active run pointer found at {latest_path}. "
             "Start a new run with `aquinas run` or `aquinas run preprocess`, or pass `--run-id`."
         )
-    return read_json(latest_path, label="active run pointer")
+    payload = read_json(latest_path, label="active run pointer")
+    run_id = payload.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise RunManagementError(f"Active run pointer at {latest_path} is invalid: missing run_id.")
+    return payload
 
 
 def write_latest_pointer(results_dir: Path, run_id: str) -> None:
@@ -333,6 +337,8 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def _git_command_output(command: list[str]) -> str | None:
     """Run a Git command and return stripped stdout when successful."""
+    import warnings
+
     try:
         completed = subprocess.run(
             command,
@@ -341,7 +347,8 @@ def _git_command_output(command: list[str]) -> str | None:
             check=False,
             cwd=Path.cwd(),
         )
-    except OSError:
+    except OSError as exc:
+        warnings.warn(f"Git unavailable ({exc}); run metadata will omit git fields.", stacklevel=3)
         return None
 
     if completed.returncode != 0:

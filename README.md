@@ -68,6 +68,13 @@ EWSHM_Competition/
 │   ├── utils/                Shared utilities (plotting)
 │   ├── scoring/              Health score synthesis package    [TODO]
 │   └── visualization/        Offline 3D bridge viewer export + assets
+│   ├── io/                   Data I/O (AquinasReader)          [implemented]
+│   ├── cli/                  CLI commands (aquinas run/info)   [implemented]
+│   ├── preprocessing/        Signal preprocessing              [implemented]
+│   ├── feature_extraction/   Feature extraction                [stub]
+│   ├── training/             Unsupervised anomaly models       [stub]
+│   ├── utils/                Shared utilities (plotting)       [implemented]
+│   └── scoring/              Health score synthesis            [stub]
 │
 ├── AGENTS.md                 Instructions for coding agents
 ├── pyproject.toml            Package metadata and CLI entry point
@@ -118,6 +125,52 @@ EWSHM_Competition/
   implementations are still placeholders and currently exit as not implemented.
 - Top-level notebooks are the main project storyline; `notebooks/misc/` holds
   supporting analyses that use alphabetical prefixes (`A_`, `B_`, `C_`, ...).
+| `aquinas_toolkit.io` | Implemented | `AquinasReader` loads index tables and raw waveforms |
+| `aquinas_toolkit.utils` | Implemented | Plotting helpers are available through the public package API |
+| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume behavior, and preprocess-stage dispatch are complete; feature/train/score registration pending |
+| `aquinas_toolkit.preprocessing` | Implemented | Event grouping, timestamp alignment, zeroing, and preprocess-stage artifacts |
+| `aquinas_toolkit.feature_extraction` | Stub | Time- and frequency-domain features |
+| `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
+| `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
+
+## Organizer-Driven Preprocessing Notes
+
+The preprocessing stage now reflects organizer guidance shared on
+April 9, 2026 through the `AQUINAS_Explorer.R` helper script and a
+follow-up email from François-Baptiste Cartiaux:
+
+- the `AQUINAS_Explorer.R` helper script shaped the current event
+  lookup, synchronization, zeroing, and aligned-export API
+- the April 9, 2026 email warned that one sensor became damaged between
+  SET3 and SET4 and should be kept for SET1-SET3 but discarded for
+  SET4-SET5
+- the repository implements that email guidance as a config-driven
+  exclusion for `OLD_S1_UP_SUP_STR` in `AQUINAS_SET4_2024_01` and
+  `AQUINAS_SET5_2024_06`
+- the issue is not that the late raw waveform files become zero; the
+  key failure is that the TABLE metadata reports `Range = 0`
+  throughout SET4/SET5 while the raw waveform still varies and its
+  baseline shifts sharply
+
+## What preprocessing now does
+
+- groups events by deck and exact event window
+- queries organizer-style timestamp windows with strict containment
+- aligns sensors with the organizer `Synchro()` workflow:
+  first selected sensor, two shrinking passes, no interpolation
+- applies per-sensor endpoint zeroing before alignment by default
+- writes event manifests, sensor-record status tables, aligned exports,
+  summary diagnostics, a damaged-sensor QC report, and a local
+  Python-vs-R parity harness
+
+Team-facing details and rationale live in:
+
+- [configs/README.md](configs/README.md) for the canonical config
+  glossary and where to verify that a run used a given setting
+- [docs/README.md](docs/README.md) for the organizer-email record
+- [aquinas_toolkit/preprocessing/README.md](aquinas_toolkit/preprocessing/README.md) for the exact preprocessing semantics, evidence, artifacts, API behavior such as `timestamp` containment and `sensor_pattern` matching, and the Python vs `AQUINAS_Explorer.R` adaptation notes
+- [notebooks/README.md](notebooks/README.md) for notebook-specific example choices, including organizer-style substitute timestamps used in `02_preprocessing`
+- [aquinas_toolkit/feature_extraction/README.md](aquinas_toolkit/feature_extraction/README.md) for the downstream constraint
 
 ## Getting started
 

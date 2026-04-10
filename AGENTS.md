@@ -22,8 +22,8 @@ clarity, correctness, and reproducibility over enterprise patterns.
 ## Architecture
 
 ```
-reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-(done)       (TODO)              (TODO)         (TODO)       (TODO)
+reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
+[implemented]     [implemented]       [stub]               [stub]       [stub]
 ```
 
 - **Library code** lives in `aquinas_toolkit/`. Every reusable function
@@ -69,14 +69,82 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 
 | Package | Status | Purpose |
 |---|---|---|
-| `io/` | Done | `AquinasReader` -- load index tables and raw waveforms |
-| `cli/` | In progress | Run lifecycle, metadata, latest-pointer resolution, stage dispatch, and visualization packaging |
-| `preprocessing/` | TODO | Filtering, normalisation, cross-sensor alignment |
-| `feature_extraction/` | TODO | Time-domain and frequency-domain feature extraction |
-| `training/` | TODO | Unsupervised anomaly/trend detection models |
-| `utils/` | Done | Shared utilities such as plotting helpers |
-| `scoring/` | TODO | Aggregate per-sensor scores into a global health score |
-| `visualization/` | Done | Export an offline bridge viewer bundle for each run |
+| `io/` | Implemented | `AquinasReader` -- load index tables and raw waveforms |
+| `cli/` | Implemented | Run lifecycle, metadata, latest-pointer resolution, and preprocess-stage dispatch (feature/train/score registration pending) |
+| `preprocessing/` | Implemented | Deck-aware event grouping, timestamp alignment, zeroing, and preprocess-stage artifacts |
+| `feature_extraction/` | Stub | Time-domain and frequency-domain feature extraction |
+| `training/` | Stub | Unsupervised anomaly/trend detection models |
+| `utils/` | Implemented | Shared utilities: plotting helpers (`plotting.py`) and run-management helpers (`run_management.py`) used by the CLI and notebooks |
+| `scoring/` | Stub | Aggregate per-sensor scores into a global health score |
+
+## Current preprocessing contract
+
+- Group events per deck by exact `Start_Time` / `End_Time`.
+- Synchronize sensors using organizer `Synchro()` alignment: the first
+  selected sensor is the reference, two shrinking passes narrow to the
+  common timestamp window; no interpolation in v1.
+- Keep zeroing configurable; the current default is the organizer-shared
+  endpoint-line subtraction (`linear_endpoints`).
+- Read preprocessing behavior from the selected run's snapshotted
+  `config.yaml`, not from hardcoded workspace assumptions.
+- Keep preprocess logic in `aquinas_toolkit/preprocessing/`; notebooks
+  should only consume the package API.
+- `export.format` is active and supports `csv.gz` (default) and `csv`.
+
+## Preprocessing public API
+
+```python
+from aquinas_toolkit.preprocessing import (
+    AlignedEvent,
+    LoadedEventGroup,
+    OrganizerQueryResult,
+    align_event_group,
+    export_aligned_event,
+    find_events,
+    load_event_group,
+    load_timestamp_query_frames,
+    run_preprocessing,
+    run_organizer_query,
+    synchro_indices,
+    zero_loaded_event_group,
+    zero_waveform,
+)
+```
+
+| Symbol | Kind | Purpose |
+|---|---|---|
+| `find_events()` | function | Group records by `set + deck + Start_Time + End_Time`; optional timestamp-containment and sensor-pattern filters |
+| `load_event_group()` | function | Load all raw waveforms belonging to one grouped event |
+| `load_timestamp_query_frames()` | function | Organizer-style deck/sensor selection for one timestamp query |
+| `run_organizer_query()` | function | Return organizer-style aligned `DataMesures` output for one query |
+| `align_event_group()` | function | Two-pass `Synchro()` alignment, first-selected reference, no interpolation |
+| `synchro_indices()` | function | Low-level helper: compute the shared row indices from one synchronization pass |
+| `zero_loaded_event_group()` | function | Apply baseline removal to each raw sensor slice before alignment |
+| `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
+| `export_aligned_event()` | function | Export one aligned event as a CSV or CSV.GZ artifact |
+| `run_preprocessing()` | function | Execute the full preprocess stage for a snapped pipeline run |
+| `AlignedEvent` | dataclass | Output of `align_event_group()` |
+| `LoadedEventGroup` | dataclass | Output of `load_event_group()` |
+| `OrganizerQueryResult` | dataclass | Output of `run_organizer_query()` |
+
+## Damaged sensor policy
+
+François-Baptiste Cartiaux stated in an April 9, 2026 email that one
+sensor was damaged between SET3 and SET4 but still emitted erroneous
+data in SET4 and SET5.
+
+- Current repo policy excludes `OLD_S1_UP_SUP_STR` only for
+  `AQUINAS_SET4_2024_01` and `AQUINAS_SET5_2024_06`.
+- The same sensor remains valid for SET1-SET3 and should not be treated
+  as globally bad.
+- Do not reintroduce that excluded channel downstream for SET4/SET5,
+  either from raw waveforms or TABLE-derived features.
+- Treat this as a documented data-integrity exception, not as a license
+  to drop sensors arbitrarily. The overall methodology still needs to
+  use the full sensor network across the dataset.
+- See `docs/README.md` for the organizer record and
+  `aquinas_toolkit/preprocessing/README.md` for the implemented
+  evidence and artifact contract.
 
 ## Dataset facts (from the handbook)
 
@@ -93,6 +161,44 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 - **Row numbering is 1-based** in Start_Row / End_Row
 - Full reference: `AQUINAS_DATASET/README.md` and
   `docs/Aquinas-Dataset-Handbook.pdf`
+
+## IO performance contract
+
+Each sensor's raw data is stored in numbered sequential batch files named
+`{SENSOR_NAME}_SET{N}_{NUMBER}.json`. Each file is roughly 8.8 MB and covers
+between 2 and 226 index-table records. Without caching, the same file would
+be read and re-parsed from JSON once per event that references it.
+
+`AquinasReader.load_raw_file()` caches parsed DataFrames in memory, keyed on
+`(sensor_name, raw_filename)`. Do not call `_load_json_file` directly; always
+go through `load_raw_file`.
+
+- The cache is scoped to the reader instance. `run_preprocessing()` creates a
+  new `AquinasReader` per SET, so memory is released between sets.
+- Any caller that needs to modify the returned DataFrame must call `.copy()`
+  first. All existing internal callers (`_load_waveform_from_record`,
+  `_load_waveform_slice`, `read_record`) already do this.
+
+## Progress reporting
+
+`run_preprocessing()` uses `rich.progress` with the shared `get_console()` so
+`NO_COLOR` and the CLI theme are respected automatically. The display has four
+phases per SET:
+
+1. A persistent header line printed via `progress.console.print()` that stays
+   in terminal history (e.g. `SET 1/5  AQUINAS_SET1_2022_07`).
+2. An indeterminate spinner labeled `Reading sensor records...` while index
+   tables are loaded and QC reports are built (typically ~30 seconds for
+   SET1).
+3. A single event progress bar (`Processing events  312/10738  3%  ...`) that
+   fills as events are aligned and exported.
+4. A persistent one-line summary after each set completes (e.g.
+   `done  9,841 retained  897 discarded`).
+
+There is no set-level progress bar. The persistent print calls provide the
+history so completed sets remain visible while later sets run.
+
+Progress output is suppressed in pytest because stdout is not a terminal.
 
 ## Code conventions
 
@@ -129,6 +235,21 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 - **Do not add session folders, symlinks, or alternate history layers**
   unless the user explicitly asks for a design change. The run folders
   themselves are the history.
+
+## Forward-looking notes (not yet implemented)
+
+- **Temperature normalization** -- fiber-optic strain sensors are not
+  hardware-compensated; temperature metadata is preserved but active
+  normalization is deferred.
+- **OMA on short records** -- the organizer confirmed that
+  baseline-corrected short records can be concatenated into a
+  pseudo-continuous signal for Operational Modal Analysis. This does not
+  force OMA as the competition method; aligned preprocess exports are kept
+  clean so the option stays open. Organizer methodology reference:
+  DOI `10.1007/978-3-031-96106-9_22` (EVACES 2025 Volume 2).
+- **Expected bridge frequencies** -- typically 2-10 Hz for this
+  structure, which justifies the simple non-interpolating synchronization
+  strategy in v1.
 
 ## Attribution
 

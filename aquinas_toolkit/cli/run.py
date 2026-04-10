@@ -31,6 +31,12 @@ STAGE_PACKAGE_DIRS = {
     "score": "scoring",
 }
 
+# Registry maps stage name -> callable that receives a RunContext.
+# Add an entry here when a new stage is implemented; no other changes needed.
+_STAGE_REGISTRY: dict[str, str] = {
+    "preprocess": "aquinas_toolkit.preprocessing:run_preprocessing",
+}
+
 
 class StageNotImplementedError(RuntimeError):
     """Raised when a stage package has not been implemented yet."""

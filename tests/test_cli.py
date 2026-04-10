@@ -121,6 +121,13 @@ def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _write_default_config(tmp_path)
+    monkeypatch.setattr(
+        run_mod,
+        "_execute_stage",
+        lambda stage, run_context: None if stage == "preprocess" else (_ for _ in ()).throw(
+            run_mod.StageNotImplementedError("Not yet implemented")
+        ),
+    )
     monkeypatch.setattr(sys, "argv", ["aquinas", "run"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -136,8 +143,8 @@ def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     latest = _read_json(results_dir / "latest.json")
     run_id = latest["run_id"]
     metadata = _read_json(results_dir / run_id / "metadata.json")
-    assert metadata["stages"]["preprocess"]["status"] == "failed"
-    assert metadata["stages"]["features"]["status"] == "not_started"
+    assert metadata["stages"]["preprocess"]["status"] == "completed"
+    assert metadata["stages"]["features"]["status"] == "failed"
 
 
 def test_run_preprocess_creates_snapshot_and_metadata(
@@ -335,6 +342,40 @@ def test_run_full_pipeline_executes_stages_in_order(
     assert all(metadata["stages"][stage]["status"] == "completed" for stage in executed_stages)
 
 
+def test_run_full_pipeline_stops_after_train_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    executed_stages: list[str] = []
+
+    def fake_execute(stage: str, run_context: run_management.RunContext) -> None:
+        executed_stages.append(stage)
+        if stage == "train":
+            raise RuntimeError("train boom")
+
+    monkeypatch.setattr(run_mod, "_execute_stage", fake_execute)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "train boom" in captured.err
+    assert executed_stages == ["preprocess", "features", "train"]
+
+    latest = _read_json(tmp_path / "results" / "latest.json")
+    metadata = _read_json(tmp_path / "results" / latest["run_id"] / "metadata.json")
+    assert metadata["stages"]["preprocess"]["status"] == "completed"
+    assert metadata["stages"]["features"]["status"] == "completed"
+    assert metadata["stages"]["train"]["status"] == "failed"
+    assert metadata["stages"]["train"]["error"] == "train boom"
+    assert metadata["stages"]["score"]["status"] == "not_started"
+
+
 def test_run_stage_failure_records_error_in_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -363,6 +404,52 @@ def test_run_stage_failure_records_error_in_metadata(
     metadata = _read_json(tmp_path / "results" / latest["run_id"] / "metadata.json")
     assert metadata["stages"]["features"]["status"] == "failed"
     assert metadata["stages"]["features"]["error"] == "boom"
+
+
+def test_run_failed_stage_can_be_retried_in_same_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(run_mod, "_execute_stage", lambda stage, run_context: None)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    run_id = _read_json(tmp_path / "results" / "latest.json")["run_id"]
+
+    def fail_execute(stage: str, run_context: run_management.RunContext) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(run_mod, "_execute_stage", fail_execute)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features", "--run-id", run_id])
+
+    with pytest.raises(SystemExit):
+        run_mod.run()
+
+    failed_state = _read_json(tmp_path / "results" / run_id / "metadata.json")["stages"]["features"]
+    assert failed_state["status"] == "failed"
+    assert failed_state["error"] == "boom"
+    assert failed_state["completed_at_utc"] is not None
+
+    observed_running_state: dict[str, str | None] = {}
+
+    def succeed_execute(stage: str, run_context: run_management.RunContext) -> None:
+        observed_running_state.update(_read_json(run_context.metadata_path)["stages"]["features"])
+
+    monkeypatch.setattr(run_mod, "_execute_stage", succeed_execute)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features", "--run-id", run_id])
+    run_mod.run()
+
+    assert observed_running_state["status"] == "running"
+    assert observed_running_state["error"] is None
+    assert observed_running_state["completed_at_utc"] is None
+
+    stage_state = _read_json(tmp_path / "results" / run_id / "metadata.json")["stages"]["features"]
+    assert stage_state["status"] == "completed"
+    assert stage_state["error"] is None
+    assert stage_state["started_at_utc"] is not None
+    assert stage_state["completed_at_utc"] is not None
 
 
 def test_run_features_fails_clearly_when_latest_pointer_is_missing(
@@ -400,6 +487,29 @@ def test_run_features_fails_clearly_when_latest_pointer_is_invalid(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Could not parse active run pointer" in captured.err
+
+
+def test_run_features_fails_clearly_when_latest_pointer_is_missing_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    (results_dir / "latest.json").write_text(
+        json.dumps({"updated_at_utc": "2026-04-10T10:00:00Z"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "missing run_id" in captured.err
 
 
 def test_run_invalid_explicit_run_id_does_not_change_latest_pointer(

@@ -8,16 +8,17 @@ vectors out).
 
 ## Status
 
-Empty -- not yet implemented.
+Implemented for v1.
 
-Planned work:
+Current work:
 
-- Baseline removal (subtract mean or fitted trend)
-- Band-pass filtering (remove drift and high-frequency noise)
-- Temperature normalisation (compensate strain drift with ambient temp)
-- Cross-sensor time alignment (match events via `Start_Time` / `End_Time`,
-  since `Record_UID` is sensor-specific)
-- Resampling / zero-padding to a consistent record length
+- Deck-aware event grouping using exact `Start_Time` / `End_Time`
+- Organizer `Synchro()` alignment without interpolation
+- Pre-alignment zeroing (`none`, `linear_endpoints`)
+- Config-driven sensor exclusions with QC evidence reporting
+- Preprocess stage exports with retained/discarded-event diagnostics
+- Notebook-facing and parity-facing helper APIs for organizer-style
+  timestamp queries
 
 ## Interface
 

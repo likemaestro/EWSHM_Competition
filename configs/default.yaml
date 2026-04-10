@@ -17,7 +17,7 @@
 # ---------------------------------------------------------------------------
 data:
   dataset_root: AQUINAS_DATASET          # relative to repo root
-  sets:                                   # which monthly datasets to use
+  sets:                                  # which monthly datasets to use
     - AQUINAS_SET1_2022_07               # July 2022
     - AQUINAS_SET2_2023_04               # April 2023
     - AQUINAS_SET3_2023_08               # August 2023
@@ -25,14 +25,26 @@ data:
     - AQUINAS_SET5_2024_06               # June 2024
 
 # ---------------------------------------------------------------------------
-# Preprocessing  (TODO -- uncomment and fill in when implemented)
+# Preprocessing
 # ---------------------------------------------------------------------------
-# preprocessing:
-#   baseline_removal: true
-#   bandpass_filter:
-#     low_hz: 0.5
-#     high_hz: 45.0
-#   temperature_normalisation: true
+preprocessing:
+  event_grouping:
+    key_fields: [deck, Start_Time, End_Time]
+  sensor_overrides:
+    exclude:
+      - sensor_name: OLD_S1_UP_SUP_STR
+        sets: [AQUINAS_SET4_2024_01, AQUINAS_SET5_2024_06]
+        reason: damaged sensor per organizer email
+        source: François-Baptiste Cartiaux email dated April 9, 2026
+  alignment:
+    method: r_synchro
+  zeroing:
+    method: linear_endpoints
+  filtering:
+    min_active_sensors_per_event: 1
+  export:
+    format: csv.gz
+    partition_by: [set_name, deck]
 
 # ---------------------------------------------------------------------------
 # Feature extraction  (TODO)
