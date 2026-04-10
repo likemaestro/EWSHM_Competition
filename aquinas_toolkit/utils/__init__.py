@@ -5,7 +5,20 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-__all__ = ["plot_waveform", "plot_sensor_grid", "plot_sensor_overlay"]
+from aquinas_toolkit.utils.dataset_paths import (
+    find_dataset_root,
+    find_repo_root,
+    list_dataset_dirs,
+)
+
+__all__ = [
+    "plot_waveform",
+    "plot_sensor_grid",
+    "plot_sensor_overlay",
+    "find_repo_root",
+    "find_dataset_root",
+    "list_dataset_dirs",
+]
 
 
 def __getattr__(name: str) -> Any:
