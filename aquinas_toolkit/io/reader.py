@@ -227,6 +227,64 @@ class AquinasReader:
 
         return pd.concat(all_tables, ignore_index=True)
 
+    def summarize_sensor_records(
+        self,
+        quantity: str | None = None,
+        axis: str | None = None,
+    ) -> pd.DataFrame:
+        """Return parsed sensor metadata with per-sensor record counts.
+
+        Parameters
+        ----------
+        quantity:
+            Optional measurement type filter such as ``"ACC"`` or ``"STR"``.
+        axis:
+            Optional axis filter such as ``"Y"`` or ``"Z"``. This only applies
+            to acceleration channels.
+        """
+        rows = []
+        quantity_filter = quantity.upper() if quantity is not None else None
+        axis_filter = axis.upper() if axis is not None else None
+
+        for sensor_name in self.list_sensor_names():
+            sensor_meta = self._parse_sensor_name(sensor_name)
+
+            if quantity_filter is not None and sensor_meta["quantity"] != quantity_filter:
+                continue
+            if axis_filter is not None and sensor_meta["axis"] != axis_filter:
+                continue
+
+            index_df = self.load_index_table(sensor_name)
+            rows.append(
+                {
+                    "dataset": self.set_name,
+                    "sensor_name": sensor_name,
+                    **sensor_meta,
+                    "record_count": len(index_df),
+                }
+            )
+
+        if not rows:
+            return pd.DataFrame(
+                columns=[
+                    "dataset",
+                    "sensor_name",
+                    "deck",
+                    "span",
+                    "side",
+                    "location",
+                    "quantity",
+                    "axis",
+                    "record_count",
+                ]
+            )
+
+        summary = pd.DataFrame(rows, dtype=object).sort_values(
+            ["deck", "span", "side", "location", "quantity", "axis", "sensor_name"]
+        ).reset_index(drop=True)
+        summary["axis"] = summary["axis"].where(summary["axis"].notna(), None)
+        return summary
+
     def read_event_all_sensors(
         self, row_index: int = 0
     ) -> dict[str, tuple[pd.Series, pd.DataFrame]]:
@@ -291,6 +349,22 @@ class AquinasReader:
             name = "_".join(parts[:-1])
 
         return name
+
+    @staticmethod
+    def _parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
+        parts = sensor_name.split("_")
+        if len(parts) < 5:
+            raise ValueError(f"Unrecognized sensor name format: {sensor_name}")
+
+        parsed = {
+            "deck": parts[0],
+            "span": parts[1],
+            "side": parts[2],
+            "location": parts[3],
+            "quantity": parts[4],
+            "axis": parts[5] if len(parts) > 5 else None,
+        }
+        return parsed
 
     @staticmethod
     def _load_json_file(path: Path):

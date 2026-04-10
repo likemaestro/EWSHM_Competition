@@ -25,6 +25,8 @@ Deferred beyond this pass:
   crest factor, zero-crossing rate)
 - Frequency-domain features (dominant frequencies via FFT/PSD,
   spectral centroid, energy in frequency bands)
+- Frequency Domain Decomposition (FDD) for modal peak extraction from
+  multichannel acceleration response data
 - Cross-sensor features (correlation between co-located sensors)
 - Index-table features (the 15 pre-computed values already in the
   TABLE JSON: Duration, Range, Mean_Value, Temperature, etc.)

@@ -13,6 +13,16 @@ from aquinas_toolkit.preprocessing.zeroing import (
     zero_loaded_event_group,
     zero_waveform,
 )
+from aquinas_toolkit.preprocessing.signals import (
+    bandpass_filter_waveform_matrix,
+    find_common_sensor_events,
+    load_common_event_waveform_matrix,
+)
+from aquinas_toolkit.preprocessing.duration import (
+    filter_records_by_min_duration,
+    summarize_min_duration_filter,
+)
+
 
 __all__ = [
     "AlignedEvent",
@@ -28,4 +38,9 @@ __all__ = [
     "synchro_indices",
     "zero_loaded_event_group",
     "zero_waveform",
+    "bandpass_filter_waveform_matrix",
+    "filter_records_by_min_duration",
+    "find_common_sensor_events",
+    "load_common_event_waveform_matrix",
+    "summarize_min_duration_filter",
 ]
