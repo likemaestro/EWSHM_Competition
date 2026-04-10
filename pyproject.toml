@@ -26,7 +26,12 @@ aquinas = "aquinas_toolkit.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["notebooks"]
+lint.select = [
+    "E9",
+    "F821",
+    "F822",
+    "F823",
+]
 
 [tool.setuptools.packages.find]
 include = ["aquinas_toolkit*"]
