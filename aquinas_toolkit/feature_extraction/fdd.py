@@ -1,4 +1,9 @@
-"""Frequency Domain Decomposition helpers."""
+"""
+Frequency Domain Decomposition helpers.
+
+Original implementation by Mohsen Rezvani Alile.
+Migrated into aquinas_toolkit from the feature-extraction notebook workflow.
+"""
 
 from __future__ import annotations
 

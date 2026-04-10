@@ -85,3 +85,10 @@ metadata becomes inconsistent with the raw waveform while the baseline
 also shifts sharply. Feature extraction should therefore trust the
 preprocess exclusion contract and avoid silently rebuilding features for
 that sensor from either raw or TABLE sources in SET4/SET5.
+
+## Attribution
+
+Original FDD implementation and ACC_Z feature-extraction workflow by
+`Mohsen Rezvani Alile`. Migrated into `aquinas_toolkit.feature_extraction`
+from the feature-extraction notebook, preserving the established FDD
+peak-picking and mode-shape summarization logic.

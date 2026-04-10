@@ -1,4 +1,9 @@
-"""Notebook-facing helpers for the preserved ACC_Z FDD workflow."""
+"""
+Notebook-facing helpers for the preserved ACC_Z FDD workflow.
+
+Original implementation by Mohsen Rezvani Alile.
+Adapted into reusable helpers from the feature-extraction notebook workflow.
+"""
 
 from __future__ import annotations
 
