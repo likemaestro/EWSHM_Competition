@@ -8,7 +8,7 @@ the challenge rules.
 
 ## Status
 
-Empty -- not yet implemented.
+Stub — not yet implemented.
 
 Planned work:
 

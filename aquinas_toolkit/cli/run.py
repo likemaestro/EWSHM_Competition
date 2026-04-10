@@ -27,6 +27,12 @@ STAGE_PACKAGE_DIRS = {
     "score": "scoring",
 }
 
+# Registry maps stage name -> callable that receives a RunContext.
+# Add an entry here when a new stage is implemented; no other changes needed.
+_STAGE_REGISTRY: dict[str, str] = {
+    "preprocess": "aquinas_toolkit.preprocessing:run_preprocessing",
+}
+
 
 class StageNotImplementedError(RuntimeError):
     """Raised when a stage package has not been implemented yet."""
@@ -152,9 +158,18 @@ def _run_stage(stage: str, run_context: RunContext) -> None:
 
 
 def _execute_stage(stage: str, run_context: RunContext) -> None:
-    """Dispatch stage execution to the future stage implementation."""
-    target = STAGE_PACKAGE_DIRS[stage]
-    raise StageNotImplementedError(
-        f"Not yet implemented. See aquinas_toolkit/{target}/ "
-        f"(run {run_context.run_id}, config {run_context.config_path})."
-    )
+    """Dispatch stage execution via the stage registry."""
+    import importlib
+
+    entry = _STAGE_REGISTRY.get(stage)
+    if entry is None:
+        target = STAGE_PACKAGE_DIRS[stage]
+        raise StageNotImplementedError(
+            f"Stage '{stage}' is a stub — register it in _STAGE_REGISTRY in cli/run.py "
+            f"once aquinas_toolkit/{target}/ is implemented. "
+            f"(run {run_context.run_id}, config {run_context.config_path})."
+        )
+
+    module_path, func_name = entry.split(":")
+    module = importlib.import_module(module_path)
+    getattr(module, func_name)(run_context)
