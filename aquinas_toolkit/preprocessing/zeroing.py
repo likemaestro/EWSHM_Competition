@@ -7,7 +7,6 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
-from aquinas_toolkit.preprocessing.alignment import AlignedEvent
 from aquinas_toolkit.preprocessing.core import LoadedEventGroup
 
 
@@ -52,10 +51,3 @@ def zero_loaded_event_group(
     return replace(event_group, waveforms=zeroed_waveforms, zeroing_method=method)
 
 
-def zero_aligned_event(event: AlignedEvent, *, method: str = "linear_endpoints") -> AlignedEvent:
-    """Apply baseline removal to each numeric sensor column in an aligned event."""
-    aligned_waveform = event.aligned_waveform.copy()
-    sensor_columns = [column for column in aligned_waveform.columns if column != "timestamp_utc"]
-    for sensor_name in sensor_columns:
-        aligned_waveform[sensor_name] = zero_waveform(aligned_waveform[sensor_name], method=method)
-    return replace(event, aligned_waveform=aligned_waveform, zeroing_method=method)

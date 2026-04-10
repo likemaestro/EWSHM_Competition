@@ -36,10 +36,16 @@ preprocessing:
         sets: [AQUINAS_SET4_2024_01, AQUINAS_SET5_2024_06]
         reason: damaged sensor per organizer email
         source: François-Baptiste Cartiaux email dated April 9, 2026
-  alignment:
-    method: r_synchro
+  # Pipeline order: signal_filter → zeroing → alignment
+  signal_filter:
+    method: butterworth_bandpass    # options: none | butterworth_bandpass
+    low_hz: 0.5                     # lower cut-off frequency in Hz
+    high_hz: 20.0                   # upper cut-off frequency in Hz (< Nyquist 50 Hz)
+    order: 4                        # Butterworth filter order
   zeroing:
-    method: linear_endpoints
+    method: linear_endpoints        # options: none | linear_endpoints
+  alignment:
+    method: r_synchro               # only supported method; mirrors AQUINAS_Explorer.R Synchro()
   filtering:
     min_active_sensors_per_event: 1
   export:

@@ -30,6 +30,7 @@ from aquinas_toolkit.preprocessing.core import (
     load_event_group,
     prepare_sensor_records,
 )
+from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS, filter_loaded_event_group
 from aquinas_toolkit.preprocessing.zeroing import ZEROING_METHODS, zero_loaded_event_group
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir
 
@@ -106,14 +107,24 @@ class SensorExclusion:
 
 @dataclass(frozen=True)
 class PreprocessingSettings:
-    """Runtime settings for the preprocess stage."""
+    """Runtime settings for the preprocess stage.
+
+    Pipeline order: signal filtering → zeroing → alignment.
+    """
 
     dataset_root: Path
     set_names: tuple[str, ...]
     sensor_exclusions: tuple[SensorExclusion, ...] = ()
     event_key_fields: tuple[str, ...] = ("deck", "Start_Time", "End_Time")
-    alignment_method: str = "r_synchro"
+    # Signal filtering is the first conditioning step, applied to raw waveforms.
+    signal_filter_method: str = "butterworth_bandpass"
+    signal_filter_low_hz: float = 0.5
+    signal_filter_high_hz: float = 20.0
+    signal_filter_order: int = 4
+    # Zeroing removes the per-sensor linear baseline after filtering.
     zeroing_method: str = "linear_endpoints"
+    # Alignment synchronises timestamps across sensors after zeroing.
+    alignment_method: str = "r_synchro"
     min_active_sensors_per_event: int = 1
     export_format: str = "csv.gz"
     partition_by: tuple[str, ...] = ("set_name", "deck")
@@ -203,7 +214,15 @@ def run_preprocessing(run_context: RunContext) -> None:
                     continue
 
                 loaded_event = load_event_group(reader, event_row, records=included_sensor_records)
-                zeroed_event_group = zero_loaded_event_group(loaded_event, method=settings.zeroing_method)
+                # Pipeline order: filter → zero → align
+                filtered_event = filter_loaded_event_group(
+                    loaded_event,
+                    method=settings.signal_filter_method,
+                    low_hz=settings.signal_filter_low_hz,
+                    high_hz=settings.signal_filter_high_hz,
+                    order=settings.signal_filter_order,
+                )
+                zeroed_event_group = zero_loaded_event_group(filtered_event, method=settings.zeroing_method)
                 aligned_event = align_event_group(zeroed_event_group, method=settings.alignment_method)
 
                 rows_before_alignment = 0
@@ -295,6 +314,7 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     data = config.get("data") or {}
     preprocessing = config.get("preprocessing") or {}
+    signal_filter = preprocessing.get("signal_filter") or {}
     alignment = preprocessing.get("alignment") or {}
     zeroing = preprocessing.get("zeroing") or {}
     filtering = preprocessing.get("filtering") or {}
@@ -308,6 +328,13 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     set_names = tuple(data.get("sets", ()))
     if not set_names:
         raise ValueError("Config must provide at least one dataset in data.sets.")
+
+    signal_filter_method = str(signal_filter.get("method", "butterworth_bandpass"))
+    if signal_filter_method not in SIGNAL_FILTER_METHODS:
+        raise ValueError(
+            f"Unsupported preprocessing.signal_filter.method: {signal_filter_method!r}. "
+            f"Supported methods are {sorted(SIGNAL_FILTER_METHODS)}."
+        )
 
     _validate_alignment_config(alignment)
 
@@ -323,8 +350,12 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
         set_names=set_names,
         sensor_exclusions=sensor_exclusions,
         event_key_fields=tuple(event_grouping.get("key_fields", ("deck", "Start_Time", "End_Time"))),
-        alignment_method=str(alignment.get("method", "r_synchro")),
+        signal_filter_method=signal_filter_method,
+        signal_filter_low_hz=float(signal_filter.get("low_hz", 0.5)),
+        signal_filter_high_hz=float(signal_filter.get("high_hz", 20.0)),
+        signal_filter_order=int(signal_filter.get("order", 4)),
         zeroing_method=zeroing_method,
+        alignment_method=str(alignment.get("method", "r_synchro")),
         min_active_sensors_per_event=int(filtering.get("min_active_sensors_per_event", 1)),
         export_format=str(export.get("format", "csv.gz")),
         partition_by=tuple(export.get("partition_by", ("set_name", "deck"))),
@@ -584,14 +615,21 @@ def _write_summary(
         "discard_reasons": dict(discard_reasons),
         "per_deck_total": dict(per_deck_total),
         "per_deck_retained": dict(per_deck_retained),
+        "signal_filter": {
+            "method": settings.signal_filter_method,
+            "low_hz": settings.signal_filter_low_hz,
+            "high_hz": settings.signal_filter_high_hz,
+            "order": settings.signal_filter_order,
+            "stage": "before_zeroing",
+        },
+        "zeroing": {
+            "method": settings.zeroing_method,
+            "stage": "after_signal_filter_before_alignment",
+        },
         "alignment": {
             "method": settings.alignment_method,
             "reference_policy": "first_selected",
             "passes": SYNCHRO_PASSES,
-        },
-        "zeroing": {
-            "method": settings.zeroing_method,
-            "stage": "before_alignment",
         },
         "event_grouping": {"key_fields": list(settings.event_key_fields)},
         "sensor_exclusions": {

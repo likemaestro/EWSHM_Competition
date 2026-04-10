@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable
 
 import numpy as np
@@ -9,7 +10,68 @@ import pandas as pd
 from scipy.signal import butter, sosfiltfilt
 
 from aquinas_toolkit.io import AquinasReader
+from aquinas_toolkit.preprocessing.core import LoadedEventGroup
 from aquinas_toolkit.preprocessing.duration import filter_records_by_min_duration
+
+
+SIGNAL_FILTER_METHODS = {"none", "butterworth_bandpass"}
+
+
+def filter_loaded_event_group(
+    event_group: LoadedEventGroup,
+    *,
+    method: str = "butterworth_bandpass",
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    order: int = 4,
+) -> LoadedEventGroup:
+    """Apply zero-phase Butterworth band-pass filter to each loaded sensor slice.
+
+    This is the first signal-conditioning step in the preprocessing pipeline,
+    applied to raw waveforms before zeroing and alignment.
+
+    Parameters
+    ----------
+    event_group:
+        The loaded event group whose waveforms will be filtered.
+    method:
+        ``"butterworth_bandpass"`` applies a zero-phase IIR band-pass filter.
+        ``"none"`` returns the event group unchanged.
+    sampling_rate_hz:
+        Sampling frequency of the raw waveforms (default 100 Hz).
+    low_hz:
+        Lower cut-off frequency in Hz (must be > 0).
+    high_hz:
+        Upper cut-off frequency in Hz (must be < Nyquist).
+    order:
+        Filter order for the Butterworth design.
+    """
+    if method not in SIGNAL_FILTER_METHODS:
+        raise ValueError(
+            f"Unsupported signal filter method: {method!r}. "
+            f"Supported methods are {sorted(SIGNAL_FILTER_METHODS)}."
+        )
+    if method == "none":
+        return event_group
+
+    if low_hz <= 0:
+        raise ValueError("low_hz must be greater than 0 for band-pass filtering.")
+    nyquist_hz = 0.5 * sampling_rate_hz
+    if high_hz >= nyquist_hz:
+        raise ValueError("high_hz must be below the Nyquist frequency.")
+    if low_hz >= high_hz:
+        raise ValueError("low_hz must be strictly smaller than high_hz.")
+
+    sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos")
+    filtered_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
+    for sensor_name, (meta, waveform) in event_group.waveforms.items():
+        filtered = waveform.copy()
+        values = pd.to_numeric(filtered[sensor_name], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        filtered[sensor_name] = sosfiltfilt(sos, values)
+        filtered_waveforms[sensor_name] = (meta.copy(), filtered)
+
+    return replace(event_group, waveforms=filtered_waveforms)
 
 
 def find_common_sensor_events(

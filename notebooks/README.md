@@ -17,8 +17,8 @@ raw data exploration through to the final health score:
 | Notebook | Purpose | Status |
 |---|---|---|
 | `01_sensor_overview` | Dataset structure, raw waveform plots | Done |
-| `02_preprocessing` | Filtering, normalisation, alignment | TODO |
-| `03_feature_extraction` | FDD, peak picking, and mode shapes | TODO |
+| `02_preprocessing` | Filtering, zeroing, alignment | Done |
+| `03_feature_extraction` | FDD, peak picking, and mode shapes | Done |
 | `04_anomaly_detection` | Unsupervised outlier and trend detection | TODO |
 | `05_health_scoring` | Final structural health score computation | TODO |
 
@@ -53,49 +53,56 @@ jupyter lab notebooks/
 
 ## 02_preprocessing Notes
 
-- `02_preprocessing.ipynb` is a consumer of the preprocessing API, not
-  a second implementation of preprocessing logic.
-- In notebook calls to `find_events()`, `timestamp=` means
-  "return events whose metadata window contains this timestamp".
-  It is not a nearest-event search.
-- `sensor_pattern=` uses the preprocessing API's sensor-name filter.
-  With `*`, `?`, or `[]`, it uses wildcard matching.
-  Without them, it behaves like a case-insensitive substring filter.
-- Example: `sensor_pattern="*UP*ACC_Z*"` means upstream
-  Z-acceleration sensors such as `OLD_S1_UP_INT_ACC_Z`,
-  `OLD_S1_UP_MID_ACC_Z`, `OLD_S2_UP_INT_ACC_Z`, and
-  `OLD_S2_UP_MID_ACC_Z`.
-- The organizer-style strain example in `02_preprocessing.ipynb`
-  uses a real `SET2` event that starts at `2023-04-20 07:04:05`. The
-  query timestamp is `07:04:10` (strictly inside the window) because
-  `find_events` uses strict containment (`Start_Time < timestamp <
-  End_Time`), so the boundary value itself returns nothing.
-- The organizer screenshot for acceleration is labeled
-  `2022-09-01 17:51:55`, but that timestamp is not present in the
-  released competition dataset in this repository.
-- The notebook therefore uses the real `SET1` upstream
-  `ACC_Z` event at `2022-07-30 18:36:53` as a documented substitute.
-  That timestamp is inside the event window under the organizer's
-  strict containment rule; the old boundary timestamp
-  `2022-07-30 18:36:52` is no longer used.
-- The notebook shows before-zeroing and after-zeroing plots in separate
-  cells on purpose so the team can compare them without stacked axes.
+`02_preprocessing.ipynb` is a consumer of the preprocessing API, not a second
+implementation of preprocessing logic. It walks through the single pipeline in
+order: **signal filtering → zeroing → alignment**.
 
-## 02b_preprocessing_helpers Notes
+- **Event discovery:** `find_events()` groups records by deck and exact
+  `Start_Time`/`End_Time` window. `timestamp=` uses strict containment
+  (`Start_Time < timestamp < End_Time`); boundary values return nothing.
+- **Duration filtering:** `summarize_min_duration_filter()` runs across all
+  five SETs to report keep/drop counts. `find_common_sensor_events()` then
+  restricts to events present in every selected sensor.
+- **Signal filtering:** `filter_loaded_event_group()` applies a 0.5–20 Hz
+  zero-phase Butterworth band-pass filter before any baseline or timing
+  correction. A raw-vs-filtered overlay is shown for up to three ACC_Z channels.
+- **Zeroing:** `zero_loaded_event_group()` subtracts the linear baseline
+  (endpoint-to-endpoint straight line) from each filtered sensor slice.
+  Before/after plots are shown in separate cells so the team can compare them
+  without stacked axes. Both a SET2 strain example and a SET1 ACC_Z example
+  are included.
+- **Alignment:** `align_event_group()` implements the organizer `Synchro()`
+  workflow — first sensor as reference, two shrinking passes, no interpolation.
+  Alignment diagnostics are displayed.
+- **Export smoke-test:** `export_aligned_event()` writes one event to CSV and
+  the result is read back to confirm the artifact.
 
-- `02b_preprocessing_helpers.ipynb` demonstrates Mohsen's preserved
-  helper workflow for ACC_Z records:
-  duration filtering, common-event discovery, waveform-matrix loading,
-  and zero-phase band-pass filtering.
-- It is intentionally notebook-thin: reusable logic should remain in
-  `aquinas_toolkit.preprocessing`.
+Organizer-specific timestamp notes:
+
+- The SET2 strain example uses a real event starting at
+  `2023-04-20 07:04:05`; the notebook queries with timestamp `07:04:10`
+  (strictly inside the window).
+- The organizer's acceleration screenshot shows `2022-09-01 17:51:55`,
+  which is not present in the released dataset. The notebook uses the real
+  SET1 upstream `ACC_Z` event at `2022-07-30 18:36:53` as a documented
+  substitute. `sensor_pattern=` uses wildcard matching when the pattern
+  contains `*`, `?`, or `[]`; otherwise it is a case-insensitive substring
+  filter.
 
 ## 03_feature_extraction Notes
 
-- `03_feature_extraction.ipynb` is the FDD-focused feature notebook for
-  this pass.
-- It uses preprocessing helpers to prepare filtered multichannel event
-  matrices and feature-extraction helpers to compute FDD, peaks, and
-  mode shapes.
-- It should not define reusable event-loop or summary-table logic
-  inline; those belong in `aquinas_toolkit.feature_extraction`.
+`03_feature_extraction.ipynb` preserves Mohsen's FDD-focused feature
+workflow. Signal conditioning (band-pass filtering, zeroing, alignment) is
+handled entirely by the preprocessing stage described in notebook 02; this
+notebook takes the conditioned waveforms and derives modal features.
+
+- Runs `run_acc_z_fdd_workflow()` from `aquinas_toolkit.feature_extraction`
+  for each SET/deck combination.
+- Extracts dominant FDD peaks from the first singular-value curve inside the
+  0.5–20 Hz band.
+- Displays signed and absolute mode-shape summaries annotated by structural
+  location (deck side, span, position).
+- Plots first-singular-value spectra with picked-peak overlays.
+- Reusable logic (FDD computation, peak picking, mode-shape annotation) lives
+  in `aquinas_toolkit/feature_extraction/`; the notebook is thin wrappers
+  and display only.

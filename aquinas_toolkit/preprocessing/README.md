@@ -10,96 +10,52 @@ vectors out).
 
 Implemented for v1.
 
-Current work:
+Pipeline order: **signal filtering → zeroing → alignment**
 
-- Minimum-duration filtering for acceleration records when short windows
-  cannot resolve the target structural frequency range
-- Baseline removal (subtract mean or fitted trend)
-- Band-pass filtering (remove drift and high-frequency noise)
-- Temperature normalisation (compensate strain drift with ambient temp)
-- Cross-sensor time alignment (match events via `Start_Time` / `End_Time`,
-  since `Record_UID` is sensor-specific)
-- Resampling / zero-padding to a consistent record length
-
-## Interface
-
-- **Input:** raw waveform DataFrames from `AquinasReader.read_record()`
-  and index-table metadata (especially `Temperature`)
-- **Output:** cleaned, aligned DataFrames ready for feature extraction
-
-## Implemented helpers
-
-- `filter_records_by_min_duration(...)` -- filter index-table rows by a
-  minimum `Duration` threshold, optionally restricted to a sensor subset
-  such as `ACC_Z`
-- `summarize_min_duration_filter(...)` -- report how many records are
-  kept and excluded per sensor after the duration filter
-- `find_common_sensor_events(...)` -- align surviving records across
-  sensors using `Start_Time` / `End_Time`
-- `load_common_event_waveform_matrix(...)` -- load one aligned event as a
-  multichannel waveform matrix
-- `bandpass_filter_waveform_matrix(...)` -- apply a zero-phase Butterworth
-  band-pass filter such as `0.5-20 Hz`
-- Deck-aware event grouping using exact `Start_Time` / `End_Time`
-- Organizer `Synchro()` alignment without interpolation
-- Pre-alignment zeroing (`none`, `linear_endpoints`)
-- Config-driven sensor exclusions with QC evidence reporting
-- Preprocess stage exports with retained/discarded-event diagnostics
-- Notebook-facing and parity-facing helper APIs for organizer-style
-  timestamp queries
-
-## Interface
-
-- **Input:** raw waveform DataFrames from `AquinasReader.read_record()`
-  and index-table metadata (especially `Temperature`)
-- **Output:** cleaned, aligned DataFrames ready for feature extraction
-
-## Implemented helpers
-
-- `filter_records_by_min_duration(...)` -- filter index-table rows by a
-  minimum `Duration` threshold, optionally restricted to a sensor subset
-  such as `ACC_Z`
-- `summarize_min_duration_filter(...)` -- report how many records are
-  kept and excluded per sensor after the duration filter
-- `find_common_sensor_events(...)` -- align surviving records across
-  sensors using `Start_Time` / `End_Time`
-- `load_common_event_waveform_matrix(...)` -- load one aligned event as a
-  multichannel waveform matrix
-- `bandpass_filter_waveform_matrix(...)` -- apply a zero-phase Butterworth
-  band-pass filter such as `0.5-20 Hz`; this is the notebook-facing
-  filtering step used immediately before FDD feature extraction
-- Deck-aware event grouping using exact `Start_Time` / `End_Time`
-- Organizer `Synchro()` alignment without interpolation
-- Pre-alignment zeroing (`none`, `linear_endpoints`)
-- Config-driven sensor exclusions with QC evidence reporting
-- Preprocess stage exports with retained/discarded-event diagnostics
-- Notebook-facing and parity-facing helper APIs for organizer-style
-  timestamp queries
+1. Zero-phase Butterworth band-pass filter applied to each raw sensor
+   waveform (default 0.5–20 Hz, order 4).
+2. Per-sensor linear-endpoint baseline removal (zeroing).
+3. Organizer `Synchro()` timestamp alignment across sensors.
 
 ## Interface
 
 - **Input:** raw waveform DataFrames from `AquinasReader`, grouped by
   exact event windows within each deck
-- **Output:** aligned, zeroed per-event waveform tables plus manifest
-  and diagnostics artifacts under `results/<run_id>/stages/preprocess/`
+- **Output:** filtered, zeroed, aligned per-event waveform tables plus
+  manifest and diagnostics artifacts under
+  `results/<run_id>/stages/preprocess/`
 
 ## Public API
 
 ```python
 from aquinas_toolkit.preprocessing import (
-    AlignedEvent,
-    LoadedEventGroup,
-    OrganizerQueryResult,
-    align_event_group,
-    export_aligned_event,
+    # Pipeline helpers — use these in the correct order
+    filter_loaded_event_group,    # step 1: signal filtering
+    zero_loaded_event_group,      # step 2: baseline removal
+    align_event_group,            # step 3: timestamp alignment
+    # Event discovery and loading
     find_events,
     load_event_group,
     load_timestamp_query_frames,
+    # Batch pipeline and export
     run_preprocessing,
+    export_aligned_event,
+    # Organizer parity
     run_organizer_query,
     synchro_indices,
-    zero_loaded_event_group,
+    # Signal helpers (also used by feature extraction)
+    bandpass_filter_waveform_matrix,
+    filter_records_by_min_duration,
+    find_common_sensor_events,
+    load_common_event_waveform_matrix,
+    summarize_min_duration_filter,
+    # Low-level
     zero_waveform,
+    SIGNAL_FILTER_METHODS,
+    # Dataclasses
+    AlignedEvent,
+    LoadedEventGroup,
+    OrganizerQueryResult,
 )
 ```
 
@@ -107,16 +63,22 @@ Key symbols:
 
 | Symbol | Kind | Purpose |
 |---|---|---|
-| `find_events()` | function | Group records by `set + deck + Start_Time + End_Time` and optionally filter by strict timestamp containment or sensor pattern |
+| `filter_loaded_event_group()` | function | Apply zero-phase band-pass filter to each raw sensor slice (first conditioning step) |
+| `zero_loaded_event_group()` | function | Apply baseline removal to each filtered sensor slice before alignment |
+| `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
+| `align_event_group()` | function | Two-pass `Synchro()` alignment, first-selected reference, no interpolation |
+| `find_events()` | function | Group records by `set + deck + Start_Time + End_Time` with optional timestamp/sensor filters |
 | `load_event_group()` | function | Load all raw waveforms that belong to one grouped event |
 | `load_timestamp_query_frames()` | function | Reproduce organizer-style timestamp selection for one deck/sensor subset |
 | `run_organizer_query()` | function | Return organizer-style aligned `DataMesures` output for one timestamp query |
-| `align_event_group()` | function | Two-pass `Synchro()` alignment, first-selected reference, no interpolation |
 | `synchro_indices()` | function | Low-level helper: compute the shared row indices from one synchronization pass |
-| `zero_loaded_event_group()` | function | Apply baseline removal to each raw sensor slice before alignment |
-| `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
 | `export_aligned_event()` | function | Export one aligned event as a CSV or CSV.GZ artifact |
 | `run_preprocessing()` | function | Execute the full preprocess stage for a snapped pipeline run |
+| `bandpass_filter_waveform_matrix()` | function | Apply a zero-phase Butterworth band-pass filter to a multichannel wide-format matrix |
+| `filter_records_by_min_duration()` | function | Filter index-table rows by a minimum `Duration` threshold |
+| `summarize_min_duration_filter()` | function | Report keep/remove counts after minimum-duration filtering |
+| `find_common_sensor_events()` | function | Find events present in every selected sensor after duration filtering |
+| `load_common_event_waveform_matrix()` | function | Load one event as a wide multichannel waveform matrix |
 | `AlignedEvent` | dataclass | Output of `align_event_group()` |
 | `LoadedEventGroup` | dataclass | Output of `load_event_group()` |
 | `OrganizerQueryResult` | dataclass | Output of `run_organizer_query()` |
@@ -141,30 +103,42 @@ Key symbols:
 - `load_event_group()` then loads every raw waveform slice that belongs
   to the grouped event after those filters have been applied.
 
-## Alignment And Zeroing Semantics
+## Signal Filtering, Zeroing, and Alignment Semantics
 
-- `find_events(..., timestamp=...)` uses strict containment:
-  `Start_Time < timestamp < End_Time`.
+### Pipeline order
+
+The preprocessing pipeline conditions each raw event in three sequential
+steps, in this order:
+
+1. **Signal filtering** — `filter_loaded_event_group()` applies a
+   zero-phase Butterworth band-pass filter (`butterworth_bandpass`,
+   default 0.5–20 Hz, order 4) independently to each raw sensor
+   waveform. Filtering on the raw signal ensures no baseline or
+   alignment artefacts contaminate the passband.
+2. **Zeroing** — `zero_loaded_event_group()` applies linear-endpoint
+   baseline removal to each filtered sensor slice. Zeroing after
+   filtering keeps the baseline estimate within the filtered band.
+3. **Alignment** — `align_event_group()` / `organizer_align_sensor_frames()`
+   implement organizer `Synchro()` behavior: the first selected sensor
+   becomes the reference seed, alignment runs for exactly two shrinking
+   passes, and no interpolation is used.
+
+### Additional semantics
+
 - `load_timestamp_query_frames()` mirrors the organizer helper's
   deck-plus-sensor selection order and widens duplicate sensor matches
   with `min(Start_Row):max(End_Row)` before waveform loading.
-- `align_event_group()` and `organizer_align_sensor_frames()` implement
-  organizer `Synchro()` behavior directly:
-  the first selected sensor becomes the reference seed, alignment runs
-  for exactly two shrinking passes, and no interpolation is used.
-- Config-driven exclusions are still applied before alignment in the
+- Config-driven exclusions are applied before waveform loading in the
   batch preprocess stage, so an excluded sensor never enters the
-  organizer synchronization loop for that stage run.
-- `zero_loaded_event_group()` applies baseline removal to each loaded
-  raw sensor slice before alignment.
+  signal-conditioning or synchronization loop for that stage run.
 - `linear_endpoints` subtracts, for each sensor slice independently, the
-  straight baseline line that connects that slice's earliest and latest
-  retained raw samples.
-- Supported runtime zeroing methods are now `none` and
-  `linear_endpoints`.
-- `min_active_sensors_per_event=1` remains only the minimum inclusion
-  filter before waveform loading. An event can still be discarded later
-  if organizer-style synchronization leaves zero common rows.
+  straight baseline line connecting that slice's earliest and latest
+  retained sample.
+- Supported zeroing methods: `none` and `linear_endpoints`.
+- Supported signal filter methods: `none` and `butterworth_bandpass`.
+- `min_active_sensors_per_event=1` is the minimum inclusion filter
+  before waveform loading. An event can still be discarded later if
+  organizer-style synchronization leaves zero common rows.
 
 ## Python vs `AQUINAS_Explorer.R`
 
@@ -188,13 +162,12 @@ Key symbols:
 | Email, April 2, 2026 | Recording is triggered per deck with a 5-second pre-trigger buffer and a quiet-tail stop rule | Keep preprocessing deck-specific and preserve full raw record duration | Event grouping and waveform loading | Implemented now |
 | Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Logger polling causes slight sensor time shifts | Use the organizer `Synchro()` workflow with first-selected reference and two shrinking passes | `alignment.method = r_synchro`, alignment diagnostics | Implemented now |
 | Meeting Q&A, April 9, 2026 | Synchronize without interpolation | Keep organizer alignment discrete and non-interpolating | `align_event_group()` and aligned exports | Implemented now |
-| Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Zeroing is flexible; endpoint-line subtraction is the shared helper behavior | Make organizer endpoint subtraction the runtime default before alignment | `zeroing.method = linear_endpoints` | Implemented now |
+| Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Zeroing is flexible; endpoint-line subtraction is the shared helper behavior | Make organizer endpoint subtraction the runtime default, applied after band-pass filtering | `zeroing.method = linear_endpoints` | Implemented now |
 | Meeting Q&A, April 9, 2026 | Missing or incomplete records can be discarded if justified | Keep discard reasons explicit in stage artifacts | `event_manifest.csv`, `summary.json` | Implemented now |
 | Organizer email, April 9, 2026 | One sensor was damaged between SET3 and SET4 and should be discarded for SET4 and SET5 only | Add a config-driven exclusion policy rather than hardcoding it in the algorithm | `preprocessing.sensor_overrides.exclude` | Implemented now |
 | Local dataset validation, April 9, 2026 guidance | `OLD_S1_UP_SUP_STR` matches the warning: TABLE `Range` becomes `0.0` throughout SET4 and SET5 while raw slices still vary and the baseline shifts sharply | Emit a report-only QC artifact that validates the exclusion and keeps the decision auditable | `sensor_qc_report.csv` | Implemented now |
 | Meeting Q&A, April 9, 2026 | Temperature is not hardware-compensated | Preserve temperature metadata but defer active compensation | `sensor_records.csv` | Deferred but acknowledged |
-| Follow-up Q&A, source date pending | Sensors are fiber-optic optical strand sensors, not strain gauges | Use fiber-optic terminology in docs and notebooks | Docs and notebook wording | Implemented now |
-| Follow-up Q&A, source date pending | Expected frequencies are around 2-10 Hz | Use this as rationale for simple non-interpolating alignment, not as a hard filter design | Alignment rationale only | Deferred but acknowledged |
+| Follow-up Q&A, source date pending | Expected frequencies are around 2–10 Hz | Use 0.5–20 Hz band-pass as the default passband in both the preprocessing pipeline and the FDD analysis notebook | `signal_filter.low_hz`, `signal_filter.high_hz` | Implemented now |
 
 <!-- TODO: consider writing aligned waveforms to a SQLite database instead of
      CSV/CSV.GZ. Subsequent stages (feature extraction, training, scoring)
@@ -217,10 +190,12 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 
 ## Implemented Now
 
+- Band-pass filtering before zeroing and alignment (zero-phase Butterworth,
+  configurable passband, default 0.5–20 Hz)
 - Exact event grouping with `set + deck + Start_Time + End_Time`
 - Organizer-style strict timestamp containment for timestamp queries
 - Organizer `Synchro()` alignment without interpolation
-- Zero-before-alignment with organizer `linear_endpoints` as the default
+- Zeroing after filtering with organizer `linear_endpoints` as the default
 - Exclusion-aware manifests, sensor-record statuses, and summary counts
 - QC reporting for the damaged-sensor override
 - Manifest, sensor-record, aligned-export, and summary artifacts
@@ -229,21 +204,19 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 
 ## Which config fields are true knobs in v1
 
-- `alignment.method` is active, and `r_synchro` is now the only
-  supported runtime value.
-- The `alignment.method` key is retained intentionally as a TODO-shaped
-  extension point, so additional organizer-compatible methods can be
-  introduced later without changing the config schema.
-- Legacy alignment keys such as `reference_sensor`, `tolerance_ms`, and
-  `drop_unmatched_rows` are rejected when loading preprocessing
-  settings.
-- `min_active_sensors_per_event` and `zeroing.method` are active runtime
-  settings in v1.
+- `signal_filter.method` is active; `butterworth_bandpass` and `none`
+  are the supported values. Set to `none` to skip filtering.
+- `signal_filter.low_hz`, `signal_filter.high_hz`, and
+  `signal_filter.order` are active and control the Butterworth passband.
+- `alignment.method` is active; `r_synchro` is the only supported value.
+  Retained as an extension point for future organizer-compatible methods.
+- Legacy alignment keys (`reference_sensor`, `tolerance_ms`,
+  `drop_unmatched_rows`) are rejected when loading preprocessing settings.
+- `zeroing.method` (`none` or `linear_endpoints`) and
+  `min_active_sensors_per_event` are active runtime settings in v1.
 - `event_grouping.key_fields` records the fixed v1 grouping contract.
-  It does not yet drive arbitrary regrouping behavior.
-- `export.partition_by` records the fixed v1 aligned-export partitioning
-  shape rather than driving a generic exporter.
-- `export.format` is active and currently supports `csv.gz` and `csv`.
+- `export.partition_by` records the fixed v1 aligned-export partitioning.
+- `export.format` is active; supports `csv.gz` and `csv`.
 
 ## Deferred But Acknowledged
 
@@ -293,8 +266,8 @@ Important clarification for the team:
 
 - `Range = 0` refers to the TABLE JSON metadata field, not to the raw
   waveform file being all zeros
-- for example, the matching SET4 raw files still have visible variation
-  even when the TABLE row reports `Range = 0`
+- the matching SET4 raw files still have visible variation even when
+  the TABLE row reports `Range = 0`
 - this mismatch is exactly why the channel is treated as unreliable in
   SET4 and SET5
 - current dataset validation found `OLD_S1_UP_SUP_STR` to be the only

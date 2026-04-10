@@ -14,7 +14,9 @@ from aquinas_toolkit.preprocessing.zeroing import (
     zero_waveform,
 )
 from aquinas_toolkit.preprocessing.signals import (
+    SIGNAL_FILTER_METHODS,
     bandpass_filter_waveform_matrix,
+    filter_loaded_event_group,
     find_common_sensor_events,
     load_common_event_waveform_matrix,
 )
@@ -38,7 +40,9 @@ __all__ = [
     "synchro_indices",
     "zero_loaded_event_group",
     "zero_waveform",
+    "SIGNAL_FILTER_METHODS",
     "bandpass_filter_waveform_matrix",
+    "filter_loaded_event_group",
     "filter_records_by_min_duration",
     "find_common_sensor_events",
     "load_common_event_waveform_matrix",

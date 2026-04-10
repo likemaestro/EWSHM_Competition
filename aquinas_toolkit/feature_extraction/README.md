@@ -23,20 +23,17 @@ Deferred beyond this pass:
 
 - Time-domain statistics (RMS, peak-to-peak, kurtosis, skewness,
   crest factor, zero-crossing rate)
-- Frequency-domain features (dominant frequencies via FFT/PSD,
+- Frequency-domain features beyond FDD (dominant frequencies via FFT/PSD,
   spectral centroid, energy in frequency bands)
-- Frequency Domain Decomposition (FDD) for modal peak extraction from
-  multichannel acceleration response data
 - Cross-sensor features (correlation between co-located sensors)
 - Index-table features (the 15 pre-computed values already in the
   TABLE JSON: Duration, Range, Mean_Value, Temperature, etc.)
-- Additional frequency-domain summaries beyond FDD
-- Cross-sensor correlation features
-- Index-table feature assembly
 
 ## Interface
 
-- **Input:** preprocessed waveform DataFrames + index-table metadata
+- **Input:** filtered, zeroed, and aligned waveform DataFrames from the
+  preprocessing stage (band-pass filtered, baseline-corrected,
+  timestamp-synchronized)
 - **Output:** a feature matrix (rows = events, columns = named features)
 
 ## Implemented helpers
@@ -58,11 +55,11 @@ Deferred beyond this pass:
 
 The intended ownership split is:
 
-- `aquinas_toolkit.preprocessing` prepares waveform matrices
-  via duration filtering, common-event loading, and zero-phase
-  band-pass filtering
-- `aquinas_toolkit.feature_extraction` derives modal features from those
-  prefiltered matrices
+- `aquinas_toolkit.preprocessing` handles all signal conditioning:
+  band-pass filtering, baseline zeroing, timestamp alignment, duration
+  filtering, common-event loading, and the batch preprocess pipeline
+- `aquinas_toolkit.feature_extraction` derives modal and statistical
+  features from the conditioned waveforms produced by preprocessing
 <!-- TODO: consider writing preprocessing output and feature vectors into a
      SQLite database instead of CSV/CSV.GZ. Feature extraction, training, and
      scoring all query the same data by event, sensor, set, and deck. Indexed

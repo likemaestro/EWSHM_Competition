@@ -60,21 +60,14 @@ raw waveform files. See `AQUINAS_DATASET/README.md` and
 EWSHM_Competition/
 │
 ├── aquinas_toolkit/          Core Python package
-│   ├── io/                   Data I/O (AquinasReader)
-│   ├── cli/                  CLI commands (aquinas run/info/viz)
-│   ├── preprocessing/        Signal preprocessing package      [TODO]
-│   ├── feature_extraction/   Feature extraction package        [TODO]
-│   ├── training/             Unsupervised anomaly package      [TODO]
-│   ├── utils/                Shared utilities (plotting)
-│   ├── scoring/              Health score synthesis package    [TODO]
-│   └── visualization/        Offline 3D bridge viewer export + assets
-│   ├── io/                   Data I/O (AquinasReader)          [implemented]
-│   ├── cli/                  CLI commands (aquinas run/info)   [implemented]
-│   ├── preprocessing/        Signal preprocessing              [implemented]
-│   ├── feature_extraction/   Feature extraction                [stub]
-│   ├── training/             Unsupervised anomaly models       [stub]
-│   ├── utils/                Shared utilities (plotting)       [implemented]
-│   └── scoring/              Health score synthesis            [stub]
+│   ├── io/                   Data I/O (AquinasReader)              [implemented]
+│   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
+│   ├── preprocessing/        Signal preprocessing                  [implemented]
+│   ├── feature_extraction/   Feature extraction (FDD)              [partial]
+│   ├── training/             Unsupervised anomaly models           [stub]
+│   ├── utils/                Shared utilities (plotting)           [implemented]
+│   ├── scoring/              Health score synthesis                [stub]
+│   └── visualization/        Offline 3D bridge viewer             [implemented]
 │
 ├── AGENTS.md                 Instructions for coding agents
 ├── pyproject.toml            Package metadata and CLI entry point
@@ -99,37 +92,12 @@ EWSHM_Competition/
 
 | Area | Status | Notes |
 |---|---|---|
-| `aquinas_toolkit.io` | Done | `AquinasReader` loads index tables and raw waveforms |
-| `aquinas_toolkit.utils` | Done | Plotting helpers are available through the public package API |
-| `aquinas_toolkit.cli` | In progress | `aquinas info`, run lifecycle commands, automatic viewer refresh from `aquinas run`, and visualization serving commands are implemented |
-| `aquinas_toolkit.visualization` | Done | Exports an offline bridge viewer bundle with proxy metrics, trends, correlations, and optional waveform previews |
-| `aquinas_toolkit.preprocessing` | TODO | Package exists, but stage algorithms are not implemented yet |
-| `aquinas_toolkit.feature_extraction` | TODO | Package exists, but stage algorithms are not implemented yet |
-| `aquinas_toolkit.training` | TODO | Package exists, but stage algorithms are not implemented yet |
-| `aquinas_toolkit.scoring` | TODO | Package exists, but stage algorithms are not implemented yet |
-
-## What is usable today
-
-- `aquinas info` summarizes the dataset layout and available AQUINAS sets.
-- `aquinas run` and `aquinas run preprocess` create validated run folders,
-  snapshot `configs/default.yaml`, update `results/latest.json`, and
-  refresh `results/<run_id>/visualization/` when dataset inputs are available.
-- `aquinas run features|train|score` resolve an existing run via `--run-id`
-  or `results/latest.json`, enforce stage order, update metadata, and
-  refresh the visualization bundle for the resolved run.
-- `aquinas viz build` explicitly rebuilds the offline visualization bundle
-  under `results/<run_id>/visualization/`.
-- `aquinas viz open` serves an existing viewer bundle over local HTTP and
-  opens it in the default browser.
-- The actual preprocessing, feature extraction, training, and scoring stage
-  implementations are still placeholders and currently exit as not implemented.
-- Top-level notebooks are the main project storyline; `notebooks/misc/` holds
-  supporting analyses that use alphabetical prefixes (`A_`, `B_`, `C_`, ...).
 | `aquinas_toolkit.io` | Implemented | `AquinasReader` loads index tables and raw waveforms |
-| `aquinas_toolkit.utils` | Implemented | Plotting helpers are available through the public package API |
-| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume behavior, and preprocess-stage dispatch are complete; feature/train/score registration pending |
-| `aquinas_toolkit.preprocessing` | Implemented | Event grouping, timestamp alignment, zeroing, and preprocess-stage artifacts |
-| `aquinas_toolkit.feature_extraction` | Stub | Time- and frequency-domain features |
+| `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
+| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, and preprocess dispatch; feature/train/score pending |
+| `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
+| `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering → zeroing → alignment pipeline with manifests and QC artifacts |
+| `aquinas_toolkit.feature_extraction` | Partial | FDD modal analysis (peak picking, mode shapes) implemented; time-domain features pending |
 | `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
 | `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
 
@@ -154,11 +122,15 @@ follow-up email from François-Baptiste Cartiaux:
 
 ## What preprocessing now does
 
-- groups events by deck and exact event window
+Pipeline order: **band-pass filter → zeroing → alignment**
+
+- groups events by deck and exact event window (`Start_Time` / `End_Time`)
 - queries organizer-style timestamp windows with strict containment
+- applies a zero-phase Butterworth band-pass filter (default 0.5–20 Hz) to
+  each raw waveform before any baseline or timing correction
+- applies per-sensor linear-endpoint zeroing (baseline removal) after filtering
 - aligns sensors with the organizer `Synchro()` workflow:
-  first selected sensor, two shrinking passes, no interpolation
-- applies per-sensor endpoint zeroing before alignment by default
+  first selected sensor as reference, two shrinking passes, no interpolation
 - writes event manifests, sensor-record status tables, aligned exports,
   summary diagnostics, a damaged-sensor QC report, and a local
   Python-vs-R parity harness
@@ -309,10 +281,10 @@ per-stage status (`not_started`, `running`, `completed`, `failed`).
 
 Current limitation:
 
-- The run-management flow is implemented, but the actual stage algorithms in
-  `preprocessing/`, `feature_extraction/`, `training/`, and `scoring/` are not
-  implemented yet. Running those stages currently ends with a "Not yet
-  implemented" message after the run metadata is updated.
+- `aquinas run features`, `aquinas run train`, and `aquinas run score` enforce
+  stage order and update metadata but the corresponding algorithms are not yet
+  wired into the CLI. The preprocessing stage (`aquinas run preprocess`) is
+  fully implemented.
 
 ### 5. Rebuild or open the viewer
 
