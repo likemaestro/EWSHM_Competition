@@ -11,6 +11,7 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
     "matplotlib>=3.7",
+    "seaborn>=0.13",
     "pyyaml>=6.0",
     "rich>=13.7",
     "jupyter",
@@ -25,6 +26,7 @@ aquinas = "aquinas_toolkit.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["notebooks"]
 
 [tool.setuptools.packages.find]
 include = ["aquinas_toolkit*"]

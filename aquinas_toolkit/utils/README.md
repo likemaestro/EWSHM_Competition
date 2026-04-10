@@ -6,6 +6,7 @@ Shared utility functions used across the toolkit and notebooks.
 This package currently provides:
 - Reusable plotting helpers for AQUINAS waveform exploration and quick visual diagnostics
 - Run-management helpers used by the CLI to create, resolve, and track pipeline runs
+- Dataset-location helpers used by notebooks and exploratory workflows
 
 ## Status
 
@@ -19,6 +20,9 @@ additional utility modules can be added as the pipeline grows.
 | `plot_waveform(waveform, ...)` | Plot a single waveform with consistent axis labels and style |
 | `plot_sensor_grid(reader, event_idx=..., ...)` | Plot the same event across all sensors in a subplot grid |
 | `plot_sensor_overlay(reader, event_idx=..., ...)` | Overlay all available sensor waveforms for one event |
+| `find_repo_root()` | Resolve the repository root from the installed toolkit source location |
+| `find_dataset_root()` | Resolve the repo-level `AQUINAS_DATASET/` directory |
+| `list_dataset_dirs(dataset_root)` | Return the available `AQUINAS_SET*` directories in sorted order |
 | `create_run(name=...)` | Create `results/<run_id>/`, snapshot `config.yaml`, initialize `metadata.json`, and update `results/latest.json` |
 | `resolve_run(run_id=...)` | Resolve an existing run explicitly or from `results/latest.json` |
 | `validate_stage_can_run(run_dir, stage)` | Enforce stage order and status prerequisites before stage execution |
@@ -31,7 +35,13 @@ Run-management implementation is in `aquinas_toolkit/utils/run_management.py` an
 ```python
 from aquinas_toolkit import plot_waveform, plot_sensor_grid, plot_sensor_overlay
 # or
-from aquinas_toolkit.utils import plot_waveform, plot_sensor_grid, plot_sensor_overlay
+from aquinas_toolkit.utils import (
+    find_dataset_root,
+    list_dataset_dirs,
+    plot_waveform,
+    plot_sensor_grid,
+    plot_sensor_overlay,
+)
 ```
 
 Run-management helpers are internal-to-CLI utilities and are imported directly from:

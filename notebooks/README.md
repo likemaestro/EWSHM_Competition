@@ -2,6 +2,13 @@
 
 Jupyter notebooks for exploration, visualisation, and presentation.
 
+## Folder layout
+
+- Top-level numbered notebooks (`01_`, `02_`, ...) are the main project
+  storyline from raw data inspection through scoring.
+- `misc/` holds supporting or one-off analyses that do not belong in the
+  main numbered sequence.
+
 ## Naming convention
 
 Notebooks are numbered sequentially so they tell a story from
@@ -14,6 +21,12 @@ raw data exploration through to the final health score:
 | `03_feature_extraction` | Time- and frequency-domain features | TODO |
 | `04_anomaly_detection` | Unsupervised outlier and trend detection | TODO |
 | `05_health_scoring` | Final structural health score computation | TODO |
+
+Supporting notebooks in `misc/` use their own local numbering:
+
+| Notebook | Purpose |
+|---|---|
+| `misc/01_temperature_correlations` | Exploratory temperature-correlation analysis |
 
 ## How to run
 
