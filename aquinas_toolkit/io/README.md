@@ -32,4 +32,4 @@ from aquinas_toolkit.io import AquinasReader
 
 ## Attribution
 
-Original implementation by Zhenkun Li.
+Original implementation by `Zhenkun Li`.
