@@ -4,7 +4,7 @@ AQUINAS dataset reader.
 Provides the ``AquinasReader`` class for loading index tables and raw
 waveform data from any AQUINAS_SET* folder.  Each SET folder contains
 48 sensors (24 acceleration + 24 strain) with JSON index tables and
-per-day raw-data files.
+numbered sequential batch files of raw waveform data.
 
 Original implementation by Zhenkun Li.
 Migrated into aquinas_toolkit with minimal formatting changes.
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -57,6 +56,7 @@ class AquinasReader:
             )
 
         self.set_name = self.dataset_dir.name
+        self._raw_file_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def summary(self) -> pd.DataFrame:
         """Return a DataFrame summarising every sensor in this dataset folder."""
@@ -75,7 +75,7 @@ class AquinasReader:
             )
         return pd.DataFrame(rows).sort_values("sensor_name").reset_index(drop=True)
 
-    def list_sensor_names(self) -> List[str]:
+    def list_sensor_names(self) -> list[str]:
         """Return a sorted list of sensor names derived from TABLE files."""
         return sorted(self._sensor_name_from_table(p.name) for p in self.table_files)
 
@@ -131,7 +131,17 @@ class AquinasReader:
         return df
 
     def load_raw_file(self, sensor_name: str, raw_filename: str) -> pd.DataFrame:
-        """Load a raw waveform JSON file for a sensor as a DataFrame."""
+        """Load a raw waveform JSON file for a sensor as a DataFrame.
+
+        Results are cached per (sensor_name, raw_filename) for the lifetime of
+        this reader instance so that multiple events sharing the same day-file
+        do not re-read and re-parse JSON from disk.  Callers that need a
+        mutable copy must call ``.copy()`` on the returned DataFrame.
+        """
+        cache_key = (sensor_name, raw_filename)
+        if cache_key in self._raw_file_cache:
+            return self._raw_file_cache[cache_key]
+
         raw_path = self.dataset_dir / sensor_name / raw_filename
         if not raw_path.exists():
             raise FileNotFoundError(f"Raw file not found: {raw_path}")
@@ -150,14 +160,15 @@ class AquinasReader:
         else:
             raise ValueError(f"Unsupported JSON structure in {raw_path}")
 
+        self._raw_file_cache[cache_key] = df
         return df
 
     def read_record(
         self,
         sensor_name: str,
-        record_uid: Optional[int] = None,
-        row_index: Optional[int] = None,
-    ) -> Tuple[pd.Series, pd.DataFrame]:
+        record_uid: int | None = None,
+        row_index: int | None = None,
+    ) -> tuple[pd.Series, pd.DataFrame]:
         """
         Read one event record for a given sensor.
 
@@ -195,7 +206,7 @@ class AquinasReader:
         raw_df = self.load_raw_file(sensor_name, raw_filename)
 
         # AQUINAS handbook: row numbering is 1-based
-        sliced = raw_df.iloc[start_row - 1 : end_row].reset_index(drop=True)
+        sliced = raw_df.iloc[start_row - 1 : end_row].copy().reset_index(drop=True)
         return meta, sliced
 
     def load_all_index_tables(self) -> pd.DataFrame:
@@ -276,14 +287,14 @@ class AquinasReader:
 
     def read_event_all_sensors(
         self, row_index: int = 0
-    ) -> dict[str, Tuple[pd.Series, pd.DataFrame]]:
+    ) -> dict[str, tuple[pd.Series, pd.DataFrame]]:
         """
         Read the same event index from every sensor.
 
         Returns a dict mapping sensor_name -> (metadata, waveform).
         Sensors where the event index is out of range are silently skipped.
         """
-        results: dict[str, Tuple[pd.Series, pd.DataFrame]] = {}
+        results: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
         for sensor in self.list_sensor_names():
             idx_df = self.load_index_table(sensor)
             if row_index >= len(idx_df):
@@ -291,6 +302,30 @@ class AquinasReader:
             meta, waveform = self.read_record(sensor_name=sensor, row_index=row_index)
             results[sensor] = (meta, waveform)
         return results
+
+    # ------------------------------------------------------------------
+    # Public helpers (also available as private aliases for backwards compatibility)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def match_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+        """Return the first matching column name from *candidates*, case-insensitively."""
+        for c in candidates:
+            if c in df.columns:
+                return c
+        lower_map = {col.lower(): col for col in df.columns}
+        for c in candidates:
+            if c.lower() in lower_map:
+                return lower_map[c.lower()]
+        return None
+
+    @classmethod
+    def to_int(cls, x: object, field_name: str = "value") -> int:
+        """Unwrap and coerce *x* to ``int``, raising ``ValueError`` on NaN."""
+        x = cls._unwrap_scalar(x)
+        if pd.isna(x):
+            raise ValueError(f"{field_name} is NaN.")
+        return int(float(x))
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -337,25 +372,11 @@ class AquinasReader:
             return json.load(f)
 
     @staticmethod
-    def _match_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-        for c in candidates:
-            if c in df.columns:
-                return c
-        lower_map = {col.lower(): col for col in df.columns}
-        for c in candidates:
-            if c.lower() in lower_map:
-                return lower_map[c.lower()]
-        return None
-
-    @staticmethod
-    def _unwrap_scalar(x):
+    def _unwrap_scalar(x: object) -> object:
         while isinstance(x, (list, tuple)) and len(x) > 0:
             x = x[0]
         return x
 
-    @classmethod
-    def _to_int(cls, x, field_name="value"):
-        x = cls._unwrap_scalar(x)
-        if pd.isna(x):
-            raise ValueError(f"{field_name} is NaN.")
-        return int(float(x))
+    # Kept for internal use; prefer the public match_column / to_int aliases.
+    _match_column = match_column  # type: ignore[assignment]
+    _to_int = to_int  # type: ignore[assignment]

@@ -41,6 +41,14 @@ def test_cli_reexports_main() -> None:
     assert callable(main)
 
 
+def test_preprocessing_reexports_public_api() -> None:
+    from aquinas_toolkit.preprocessing import align_event_group, find_events, run_preprocessing
+
+    assert callable(find_events)
+    assert callable(align_event_group)
+    assert callable(run_preprocessing)
+
+
 def test_package_import_is_lazy_for_plotting(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "aquinas_toolkit", raising=False)
     monkeypatch.delitem(sys.modules, "aquinas_toolkit.utils", raising=False)

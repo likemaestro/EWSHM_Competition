@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
     "matplotlib>=3.7",
+    "seaborn>=0.13",
     "pyyaml>=6.0",
     "rich>=13.7",
     "jupyter",
@@ -26,6 +27,12 @@ aquinas = "aquinas_toolkit.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+lint.select = [
+    "E9",
+    "F821",
+    "F822",
+    "F823",
+]
 
 [tool.setuptools.packages.find]
 include = ["aquinas_toolkit*"]
