@@ -36,6 +36,7 @@ def test_main_shows_usage_when_no_subcommand(
     assert "Usage: aquinas <command>" in captured.out
     assert "run" in captured.out
     assert "info" in captured.out
+    assert "viz" in captured.out
     assert captured.err == ""
 
 
@@ -96,6 +97,23 @@ def test_run_help_mentions_name_and_run_id(
     assert "--run-id" in captured.out
 
 
+def test_viz_help_mentions_build_and_open(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import viz as viz_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "viz", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        viz_mod.run()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "AQUINAS VIZ" in captured.out
+    assert "aquinas viz build" in captured.out
+    assert "aquinas viz open" in captured.out
+
+
 def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -111,6 +129,7 @@ def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Running full pipeline for run" in captured.out
+    assert "aquinas viz open" in captured.out
     assert "Not yet implemented" in captured.err
 
     results_dir = tmp_path / "results"
@@ -148,6 +167,7 @@ def test_run_preprocess_creates_snapshot_and_metadata(
     assert "Config snapshot" in captured.out
     assert "DONE" in captured.out
     assert "preprocess" in captured.out
+    assert "aquinas viz open" in captured.out
 
     results_dir = tmp_path / "results"
     latest = _read_json(results_dir / "latest.json")

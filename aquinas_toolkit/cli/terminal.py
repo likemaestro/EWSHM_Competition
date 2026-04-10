@@ -96,6 +96,11 @@ def print_run_help(stages: tuple[str, ...] | list[str]) -> None:
     get_console().print(render_run_help(stages))
 
 
+def print_viz_help() -> None:
+    """Render the ``aquinas viz`` help view."""
+    get_console().print(render_viz_help())
+
+
 def print_error(message: str) -> None:
     """Render a styled error message to stderr."""
     get_console(stderr=True).print(_status_text("ERROR", None, message, "error"))
@@ -141,6 +146,24 @@ def print_info_table(rows: list[dict[str, Any]]) -> None:
     get_console().print(render_info_table(rows))
 
 
+def print_viz_summary(
+    *,
+    run_id: str,
+    output_dir: Path,
+    manifest_path: Path,
+    index_path: Path,
+) -> None:
+    """Render the viewer artifact summary."""
+    get_console().print(
+        render_viz_summary(
+            run_id=run_id,
+            output_dir=output_dir,
+            manifest_path=manifest_path,
+            index_path=index_path,
+        )
+    )
+
+
 def render_top_level_help() -> CLIView:
     """Build the top-level help renderable."""
     usage = Text("Usage: aquinas <command> [options]", style="key")
@@ -155,11 +178,13 @@ def render_top_level_help() -> CLIView:
     commands.add_column("Description")
     commands.add_row("run [stage]", "Run the full pipeline or a single stage.")
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
+    commands.add_row("viz <subcommand>", "Build or open the offline bridge viewer bundle.")
     commands.add_row("help", "Show this usage message.")
 
     notes = _notes_table(
         [
             ("Stages", "preprocess, features, train, score"),
+            ("Viewer", "Use `aquinas viz build` to package an offline visualization."),
             ("--name", "Use only when creating a new run."),
             ("--run-id", "Resume features, train, or score from an existing run."),
         ]
@@ -170,9 +195,11 @@ def render_top_level_help() -> CLIView:
         "Commands:\n"
         "  run [stage]   Run the analysis pipeline (all stages, or a specific one).\n"
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
+        "  viz <subcommand>  Build or open the offline bridge viewer bundle.\n"
         "  help          Show this usage message.\n"
         "Notes:\n"
         "  Stages: preprocess, features, train, score\n"
+        "  Viewer: Use `aquinas viz build` to package an offline visualization.\n"
         "  --name: Use only when creating a new run.\n"
         "  --run-id: Resume features, train, or score from an existing run."
     )
@@ -241,6 +268,75 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
             Panel.fit(
                 Text("AQUINAS RUN", style="header"),
                 title="Pipeline Command",
+                border_style="accent",
+                box=box.ROUNDED,
+            ),
+            usage,
+            commands,
+            Panel(options, title="Options", border_style="accent", box=box.ROUNDED),
+        ),
+        plain_text,
+    )
+
+
+def render_viz_help() -> CLIView:
+    """Build the ``aquinas viz`` help renderable."""
+    usage = Text(
+        "Usage: aquinas viz build [--run-id ID] [--set SET] [--output PATH] "
+        "[--include-waveforms]\n"
+        "       aquinas viz open [--run-id ID] [--output PATH] [--host HOST] [--port PORT]",
+        style="key",
+    )
+    commands = Table(
+        box=box.SIMPLE_HEAVY,
+        border_style="accent",
+        header_style="header",
+        expand=True,
+        show_lines=False,
+    )
+    commands.add_column("Invocation", style="key", no_wrap=True)
+    commands.add_column("Description")
+    commands.add_row(
+        "aquinas viz build [--run-id ID]",
+        "Export visualization JSON plus a portable offline viewer bundle.",
+    )
+    commands.add_row(
+        "aquinas viz open [--run-id ID]",
+        "Serve the bundle over local HTTP and open it in the default browser.",
+    )
+
+    options = _notes_table(
+        [
+            ("--run-id", "Existing run to visualize. Defaults to results/latest.json."),
+            ("--set", "Optional AQUINAS set filter. Repeat to include multiple sets."),
+            ("--output", "Optional bundle directory override."),
+            ("--include-waveforms", "Export capped waveform previews for selected event groups."),
+            ("--host / --port", "Local HTTP server address for `aquinas viz open`."),
+            ("--no-browser", "Start the local server without opening a browser tab."),
+        ]
+    )
+
+    plain_text = (
+        "Usage: aquinas viz build [--run-id ID] [--set SET] [--output PATH] "
+        "[--include-waveforms]\n"
+        "       aquinas viz open [--run-id ID] [--output PATH] [--host HOST] [--port PORT]\n\n"
+        "Subcommands:\n"
+        "  build  Export visualization JSON plus a portable offline viewer bundle.\n"
+        "  open   Serve the bundle over local HTTP and open it in the default browser.\n"
+        "Options:\n"
+        "  --run-id            Existing run to visualize. Defaults to results/latest.json.\n"
+        "  --set               Optional AQUINAS set filter. Repeat to include multiple sets.\n"
+        "  --output            Optional bundle directory override.\n"
+        "  --include-waveforms Export capped waveform previews for selected event groups.\n"
+        "  --host / --port     Local HTTP server address for `aquinas viz open`.\n"
+        "  --no-browser        Start the local server without opening a browser tab."
+    )
+
+    return CLIView(
+        Group(
+            Panel.fit(
+                Text("AQUINAS VIZ", style="header"),
+                title="Visualization Command",
                 border_style="accent",
                 box=box.ROUNDED,
             ),
@@ -333,6 +429,34 @@ def render_info_table(rows: list[dict[str, Any]]) -> CLIView:
         )
 
     return CLIView(table, "\n".join(plain_lines))
+
+
+def render_viz_summary(
+    *,
+    run_id: str,
+    output_dir: Path,
+    manifest_path: Path,
+    index_path: Path,
+) -> CLIView:
+    """Build the visualization bundle summary renderable."""
+    details = _detail_lines(
+        [
+            ("Run ID", run_id),
+            ("Bundle directory", str(output_dir)),
+            ("Manifest", str(manifest_path)),
+            ("Viewer index", str(index_path)),
+        ]
+    )
+    plain_text = (
+        f"Run ID: {run_id}\n"
+        f"Bundle directory: {output_dir}\n"
+        f"Manifest: {manifest_path}\n"
+        f"Viewer index: {index_path}"
+    )
+    return CLIView(
+        Panel(details, title="Visualization Bundle", border_style="accent", box=box.ROUNDED),
+        plain_text,
+    )
 
 
 def _notes_table(rows: list[tuple[str, str]]) -> Table:

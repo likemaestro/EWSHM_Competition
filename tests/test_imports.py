@@ -16,6 +16,7 @@ import pytest
         "aquinas_toolkit.feature_extraction",
         "aquinas_toolkit.training",
         "aquinas_toolkit.scoring",
+        "aquinas_toolkit.visualization",
     ],
 )
 def test_subpackage_is_importable(module_path: str) -> None:

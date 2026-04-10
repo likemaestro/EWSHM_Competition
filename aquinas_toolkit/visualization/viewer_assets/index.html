@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AQUINAS Bridge Viewer</title>
+    <link rel="stylesheet" href="./viewer.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <p class="eyebrow">AQUINAS</p>
+          <h1>Bridge Structural Viewer</h1>
+        </div>
+
+        <div class="topbar-controls">
+          <div class="control">
+            <label for="dataset-select">Dataset</label>
+            <select id="dataset-select"></select>
+          </div>
+
+          <div class="control">
+            <label for="metric-select">Metric</label>
+            <select id="metric-select"></select>
+          </div>
+
+          <div class="control">
+            <span>Family</span>
+            <div class="segmented" id="family-toggle"></div>
+          </div>
+
+          <div class="control">
+            <span>Spacing</span>
+            <div class="segmented" id="view-toggle"></div>
+          </div>
+
+          <div class="control">
+            <label for="compare-mode">Compare</label>
+            <select id="compare-mode">
+              <option value="single">Single</option>
+              <option value="homologous">Homologous</option>
+            </select>
+          </div>
+
+          <label class="inline-toggle">
+            <input id="correlation-toggle" type="checkbox" />
+            <span>Correlations</span>
+          </label>
+
+          <div class="control control--narrow">
+            <span>&nbsp;</span>
+            <button id="reset-camera" class="ghost-button" type="button">Reset view</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="left-rail">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Filters</h2>
+              <button id="reset-filters" class="ghost-button" type="button">Reset</button>
+            </div>
+            <div id="filter-groups" class="filter-groups"></div>
+          </div>
+
+          <div class="panel legend-panel">
+            <h2>Legend</h2>
+            <ul class="legend-list">
+              <li><span class="legend-chip acc"></span>Accelerometer</li>
+              <li><span class="legend-chip str"></span>Strain gauge</li>
+              <li><span class="legend-chip high"></span>High relative value</li>
+              <li><span class="legend-chip old"></span>OLD deck</li>
+              <li><span class="legend-chip new"></span>NEW deck</li>
+            </ul>
+            <p class="legend-note">
+              Drag to orbit · Scroll to zoom · Right-drag to pan.
+              Sensor positions are normalized analytical coordinates.
+            </p>
+          </div>
+        </aside>
+
+        <section class="center-stage">
+          <div class="panel stage-panel">
+            <div class="panel-header">
+              <div>
+                <h2 id="stage-title">Bridge scene</h2>
+                <p id="stage-subtitle" class="panel-subtitle"></p>
+              </div>
+              <div class="status-strip" id="status-strip"></div>
+            </div>
+
+            <div id="scene-wrap" class="scene-wrap">
+              <canvas id="bridge-canvas"></canvas>
+              <div id="tooltip" class="tooltip hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="right-rail">
+          <div class="panel">
+            <h2>Inspector</h2>
+            <div id="inspector" class="inspector"></div>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="timeline">
+        <h2>Dataset timeline</h2>
+        <p>Switch monthly snapshots without leaving the current spatial context.</p>
+        <div id="dataset-strip" class="dataset-strip"></div>
+      </footer>
+    </div>
+
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>

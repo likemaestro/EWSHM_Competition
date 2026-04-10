@@ -15,6 +15,7 @@ def main() -> None:
     commands = {
         "run": "aquinas_toolkit.cli.run",
         "info": "aquinas_toolkit.cli.info",
+        "viz": "aquinas_toolkit.cli.viz",
     }
 
     args = sys.argv[1:]

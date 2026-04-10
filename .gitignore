@@ -181,6 +181,8 @@ cython_debug/
 .cursorindexingignore
 /AQUINAS_DATASET/*
 !/AQUINAS_DATASET/README.md
+.codex
+.claude/
 
 # Project outputs (keep the directory, ignore the contents)
 /results/*

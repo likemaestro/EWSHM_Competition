@@ -22,11 +22,13 @@ raw data exploration through to the final health score:
 | `04_anomaly_detection` | Unsupervised outlier and trend detection | TODO |
 | `05_health_scoring` | Final structural health score computation | TODO |
 
-Supporting notebooks in `misc/` use their own local numbering:
+Supporting notebooks in `misc/` use alphabetical prefixes so they are clearly
+distinguished from the numbered main storyline. Continue the series as
+`A_`, `B_`, `C_`, and so on:
 
 | Notebook | Purpose |
 |---|---|
-| `misc/01_temperature_correlations` | Exploratory temperature-correlation analysis |
+| `misc/A_temperature_correlations` | Exploratory temperature-correlation analysis |
 
 ## How to run
 
@@ -44,5 +46,8 @@ jupyter lab notebooks/
 - Always import from the toolkit: `from aquinas_toolkit import AquinasReader`.
 - Use the shared dataset helpers from `aquinas_toolkit.utils` instead of
   hardcoding notebook-relative paths.
+- For metadata-only notebook workflows, prefer
+  `from aquinas_toolkit.io import load_sensor_metadata` over manual
+  index-table loops or `read_record(...)`.
 - Standard notebook pattern:
   `from aquinas_toolkit.utils import find_dataset_root, list_dataset_dirs`

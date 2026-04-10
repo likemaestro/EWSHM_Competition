@@ -31,5 +31,8 @@ extend-exclude = ["notebooks"]
 [tool.setuptools.packages.find]
 include = ["aquinas_toolkit*"]
 
+[tool.setuptools.package-data]
+"aquinas_toolkit.visualization" = ["viewer_assets/*.html", "viewer_assets/*.css", "viewer_assets/*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

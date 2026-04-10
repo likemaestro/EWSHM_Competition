@@ -1,31 +1,60 @@
 import json
+import re
 from pathlib import Path
 
 from aquinas_toolkit import AquinasReader
+from aquinas_toolkit.io import load_sensor_metadata
 
 
 def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _build_dataset(tmp_path: Path) -> Path:
-    dataset_dir = tmp_path / "AQUINAS_SET1_2022_07"
+def _build_dataset(tmp_path: Path, dataset_name: str = "AQUINAS_SET1_2022_07") -> Path:
+    dataset_dir = tmp_path / dataset_name
     dataset_dir.mkdir()
+    set_match = re.search(r"(SET\d+)", dataset_name)
+    if set_match is None:
+        raise ValueError(f"Could not derive set label from {dataset_name}")
+    set_label = set_match.group(1)
+
+    if set_label == "SET1":
+        inf_start_times = ["2022-07-01 00:00:10", "2022-07-01 00:00:30"]
+        inf_end_times = ["2022-07-01 00:00:20", "2022-07-01 00:00:40"]
+        inf_mean_values = [0.11, 0.22]
+        inf_temperatures = [12.3, 12.8]
+        acc_start_times = ["2022-07-01 00:00:15"]
+        acc_end_times = ["2022-07-01 00:00:25"]
+        acc_mean_values = [1.5]
+        acc_temperatures = [13.1]
+    else:
+        inf_start_times = ["2023-04-01 00:00:10", "2023-04-01 00:00:30"]
+        inf_end_times = ["2023-04-01 00:00:20", "2023-04-01 00:00:40"]
+        inf_mean_values = [0.33, 0.44]
+        inf_temperatures = [17.3, 17.8]
+        acc_start_times = ["2023-04-01 00:00:15"]
+        acc_end_times = ["2023-04-01 00:00:25"]
+        acc_mean_values = [2.5]
+        acc_temperatures = [18.1]
 
     inf_sensor = dataset_dir / "NEW_S1_DO_INF_STR"
     inf_sensor.mkdir()
     _write_json(
-        dataset_dir / "TABLE_NEW_S1_DO_INF_STR_SET1.json",
+        dataset_dir / f"TABLE_NEW_S1_DO_INF_STR_{set_label}.json",
         {
             "Record_UID": [101, 102],
-            "File": ["NEW_S1_DO_INF_STR_SET1_1.json", "NEW_S1_DO_INF_STR_SET1_1.json"],
+            "File": [f"NEW_S1_DO_INF_STR_{set_label}_1.json", f"NEW_S1_DO_INF_STR_{set_label}_1.json"],
             "Start_Row": [2, 3],
             "End_Row": [3, 4],
+            "Start_Time": inf_start_times,
+            "End_Time": inf_end_times,
+            "Mean_Value": inf_mean_values,
+            "Temperature": inf_temperatures,
             "Tag": [["baseline"], ["follow_up"]],
         },
     )
     _write_json(
-        inf_sensor / "NEW_S1_DO_INF_STR_SET1_1.json",
+        inf_sensor / f"NEW_S1_DO_INF_STR_{set_label}_1.json",
         {
             "timestamp": ["2022-07-01 00:00:00.000", "2022-07-01 00:00:00.010", "2022-07-01 00:00:00.020", "2022-07-01 00:00:00.030"],
             "value": [10.0, 20.0, 30.0, 40.0],
@@ -35,17 +64,21 @@ def _build_dataset(tmp_path: Path) -> Path:
     acc_sensor = dataset_dir / "NEW_S1_DO_MID_ACC_Z"
     acc_sensor.mkdir()
     _write_json(
-        dataset_dir / "TABLE_NEW_S1_DO_MID_ACC_Z_SET1.json",
+        dataset_dir / f"TABLE_NEW_S1_DO_MID_ACC_Z_{set_label}.json",
         {
             "Record_UID": [201],
-            "File": ["NEW_S1_DO_MID_ACC_Z_SET1_1.json"],
+            "File": [f"NEW_S1_DO_MID_ACC_Z_{set_label}_1.json"],
             "Start_Row": [1],
             "End_Row": [2],
+            "Start_Time": acc_start_times,
+            "End_Time": acc_end_times,
+            "Mean_Value": acc_mean_values,
+            "Temperature": acc_temperatures,
             "Tag": [["acc"]],
         },
     )
     _write_json(
-        acc_sensor / "NEW_S1_DO_MID_ACC_Z_SET1_1.json",
+        acc_sensor / f"NEW_S1_DO_MID_ACC_Z_{set_label}_1.json",
         {
             "timestamp": ["2022-07-01 00:00:00.000", "2022-07-01 00:00:00.010", "2022-07-01 00:00:00.020"],
             "value": [1.0, 2.0, 3.0],
@@ -104,3 +137,36 @@ def test_load_all_index_tables_adds_sensor_and_dataset_columns(tmp_path: Path) -
         "NEW_S1_DO_MID_ACC_Z",
     }
     assert set(combined["dataset"]) == {"AQUINAS_SET1_2022_07"}
+
+
+def test_load_sensor_metadata_combines_readers_and_parses_datetime(tmp_path: Path) -> None:
+    dataset_dir_1 = _build_dataset(tmp_path, "AQUINAS_SET1_2022_07")
+    dataset_dir_2 = _build_dataset(tmp_path, "AQUINAS_SET2_2023_04")
+
+    reader_1 = AquinasReader(dataset_dir_1)
+    reader_2 = AquinasReader(dataset_dir_2)
+
+    metadata = load_sensor_metadata(
+        [reader_2, reader_1],
+        "NEW_S1_DO_INF_STR",
+        columns=["File", "Start_Time", "End_Time", "Mean_Value", "Temperature"],
+    )
+
+    assert list(metadata.columns) == [
+        "File",
+        "Start_Time",
+        "End_Time",
+        "Mean_Value",
+        "Temperature",
+        "dataset",
+    ]
+    assert metadata["dataset"].tolist() == [
+        "AQUINAS_SET1_2022_07",
+        "AQUINAS_SET1_2022_07",
+        "AQUINAS_SET2_2023_04",
+        "AQUINAS_SET2_2023_04",
+    ]
+    assert str(metadata["Start_Time"].dtype).startswith("datetime64")
+    assert str(metadata["End_Time"].dtype).startswith("datetime64")
+    assert metadata["Mean_Value"].tolist() == [0.11, 0.22, 0.33, 0.44]
+    assert metadata["Start_Time"].is_monotonic_increasing

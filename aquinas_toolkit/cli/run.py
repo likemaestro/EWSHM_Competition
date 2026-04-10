@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+import yaml
 
 from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.utils.run_management import (
@@ -19,6 +22,7 @@ from aquinas_toolkit.utils.run_management import (
     validate_stage_can_run,
     write_latest_pointer,
 )
+from aquinas_toolkit.visualization import build_visualization_artifacts
 
 STAGE_PACKAGE_DIRS = {
     "preprocess": "preprocessing",
@@ -122,15 +126,23 @@ def run_command(stage: str | None, name: str | None, run_id: str | None) -> int:
         try:
             _run_stage(current_stage, run_context)
         except StageNotImplementedError as exc:
+            _refresh_visualization_bundle(run_context)
+            _print_visualization_hint()
             terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
             return 1
         except RunManagementError as exc:
+            _refresh_visualization_bundle(run_context)
+            _print_visualization_hint()
             terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
             return 1
         except Exception as exc:  # pragma: no cover - defensive path
+            _refresh_visualization_bundle(run_context)
+            _print_visualization_hint()
             terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
             return 1
 
+    _refresh_visualization_bundle(run_context)
+    _print_visualization_hint()
     return 0
 
 
@@ -158,3 +170,40 @@ def _execute_stage(stage: str, run_context: RunContext) -> None:
         f"Not yet implemented. See aquinas_toolkit/{target}/ "
         f"(run {run_context.run_id}, config {run_context.config_path})."
     )
+
+
+def _refresh_visualization_bundle(run_context: RunContext) -> None:
+    """Build or refresh the offline visualization bundle when data is available."""
+    if not _visualization_inputs_available(run_context.config_path):
+        return
+    build_visualization_artifacts(run_context)
+
+
+def _print_visualization_hint() -> None:
+    """Print the post-run reminder about opening the viewer bundle."""
+    terminal.print_stage_status("TIP", "viz", "Open the visualization with `aquinas viz open`.")
+
+
+def _visualization_inputs_available(config_path: Path) -> bool:
+    """Return whether the run config points to a locally available dataset tree."""
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+
+    data_config = config.get("data")
+    if not isinstance(data_config, dict):
+        return False
+
+    dataset_root_value = data_config.get("dataset_root", "AQUINAS_DATASET")
+    dataset_root = Path(dataset_root_value)
+    if not dataset_root.is_absolute():
+        dataset_root = Path.cwd() / dataset_root
+    if not dataset_root.is_dir():
+        return False
+
+    configured_sets = data_config.get("sets")
+    if not isinstance(configured_sets, list) or not configured_sets:
+        return False
+
+    return all((dataset_root / set_name).is_dir() for set_name in configured_sets)

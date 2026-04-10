@@ -31,7 +31,8 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 - **I/O** (`aquinas_toolkit/io/`) -- data loading via `AquinasReader`.
 - **CLI** (`aquinas_toolkit/cli/`) -- `aquinas run preprocess`,
   `aquinas run features`, `aquinas run train`, `aquinas run score`,
-  and `aquinas info`. Thin wrappers that call library code.
+  `aquinas info`, `aquinas viz build`, and `aquinas viz open`.
+  Thin wrappers that call library code.
 - **Pipeline stages** are subpackages: `preprocessing/`, `feature_extraction/`,
   `training/`, `scoring/`. Each has a `README.md` describing its purpose
   and expected interface.
@@ -46,8 +47,9 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 - **Results** go to `results/` (git-ignored except `.gitkeep`).
 - **Run layout** -- new pipeline runs live under `results/<run_id>/`
   with a snapshotted `config.yaml`, `metadata.json`, and lazy
-  `stages/<stage>/` directories. `results/latest.json` is only a
-  convenience pointer to the active run.
+  `stages/<stage>/` directories. When dataset inputs are available, the
+  run command also refreshes `visualization/` for the same run.
+  `results/latest.json` is only a convenience pointer to the active run.
 - **Run IDs** use the readable UTC folder format
   `YYYY-MM-DDTHH-MM-SSZ` (for example `2026-03-31T21-45-00Z`).
 - **Config source** -- in v1, new runs always snapshot
@@ -55,7 +57,8 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
   run's `config.yaml`, never the current workspace config.
 - **CLI contract** -- `aquinas run [stage] [--name NAME] [--run-id ID]`.
   Use `--name` only when creating a new run. Use `--run-id` only for
-  `features`, `train`, or `score`.
+  `features`, `train`, or `score`. Visualization commands live under
+  `aquinas viz ...`.
 - **Config CLI scope** -- v1 does not expose `--config`; users edit
   `configs/default.yaml` before creating a new run.
 - **Stage policy** -- stage prerequisites are enforced
@@ -67,12 +70,13 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 | Package | Status | Purpose |
 |---|---|---|
 | `io/` | Done | `AquinasReader` -- load index tables and raw waveforms |
-| `cli/` | In progress | Run lifecycle, metadata, latest-pointer resolution, and stage dispatch |
+| `cli/` | In progress | Run lifecycle, metadata, latest-pointer resolution, stage dispatch, and visualization packaging |
 | `preprocessing/` | TODO | Filtering, normalisation, cross-sensor alignment |
 | `feature_extraction/` | TODO | Time-domain and frequency-domain feature extraction |
 | `training/` | TODO | Unsupervised anomaly/trend detection models |
 | `utils/` | Done | Shared utilities such as plotting helpers |
 | `scoring/` | TODO | Aggregate per-sensor scores into a global health score |
+| `visualization/` | Done | Export an offline bridge viewer bundle for each run |
 
 ## Dataset facts (from the handbook)
 
@@ -112,10 +116,16 @@ reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
 - **Resume later stages explicitly or via latest**:
   `features`, `train`, and `score` resolve the target run from
   `--run-id` or `results/latest.json`.
+- **Refresh the viewer bundle from the run command**: when the dataset
+  referenced by the run config is available locally, `aquinas run ...`
+  refreshes `results/<run_id>/visualization/` automatically.
 - **Keep metadata authoritative**: update `metadata.json` stage status
   as `not_started`, `running`, `completed`, or `failed`.
 - **Keep writes atomic** for `metadata.json` and `latest.json` so an
   interrupted command does not leave a partially written file behind.
+- **Serve the viewer over HTTP**: `aquinas viz open` runs a temporary
+  local HTTP server for the bundle; do not assume the browser can load
+  the viewer correctly from `file://`.
 - **Do not add session folders, symlinks, or alternate history layers**
   unless the user explicitly asks for a design change. The run folders
   themselves are the history.
