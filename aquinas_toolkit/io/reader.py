@@ -236,7 +236,7 @@ class AquinasReader:
         Returns a dict mapping sensor_name -> (metadata, waveform).
         Sensors where the event index is out of range are silently skipped.
         """
-        results: dict[str, Tuple[pd.Series, pd.DataFrame]] = {}
+        results: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
         for sensor in self.list_sensor_names():
             idx_df = self.load_index_table(sensor)
             if row_index >= len(idx_df):
