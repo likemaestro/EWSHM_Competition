@@ -532,14 +532,12 @@ function tweenDeckPositions() {
         deckGroups[deck].position.z = fromZ[deck] + (targets[deck] - fromZ[deck]) * ease;
       }
     }
-    // Also tween sensor glyph positions
+    // Tween sensor glyph absolute Z positions in sync with their deck group
     for (const [sensorId, obj] of sensorObjs) {
       const sensor = state.sensorLayout.find((s) => s.sensor_id === sensorId);
       if (!sensor) continue;
-      const targetZ = viewModeZ(sensor);
-      obj.group.position.z = fromZ[sensor.deck] + (targets[sensor.deck] - fromZ[sensor.deck]) * ease + SIDE_Z[sensor.side];
-      // Actually sensor glyph is in scene (not in deck group), so compute absolute Z
-      obj.group.position.z = fromZ[sensor.deck] + (targets[sensor.deck] - fromZ[sensor.deck]) * ease + SIDE_Z[sensor.side];
+      obj.group.position.z =
+        fromZ[sensor.deck] + (targets[sensor.deck] - fromZ[sensor.deck]) * ease + SIDE_Z[sensor.side];
     }
     if (t < 1) tweenId = requestAnimationFrame(step);
   }
@@ -581,12 +579,15 @@ function updateSensorGlyphs() {
       }
       obj.group.scale.setScalar(isSelected ? 1.45 : (sensor.sensor_id === hoveredId ? 1.3 : 1.0));
     } else {
-      // Create new glyph
+      // Create new glyph — use the deck group's CURRENT z (may be mid-tween)
+      // so the sensor appears at the right place immediately rather than snapping
+      const currentDeckZ = deckGroups[sensor.deck]?.position.z
+        ?? state.geometry.view_modes[state.viewMode].deck_centers[sensor.deck] * SCALE;
       const group = buildGlyph(sensor, metric, isSelected);
       group.position.set(
         sensor.x * SCALE,
         sensor.y * SCALE,
-        viewModeZ(sensor)
+        currentDeckZ + SIDE_Z[sensor.side]
       );
       scene.add(group);
 
@@ -603,11 +604,6 @@ function updateSensorGlyphs() {
   }
 }
 
-function viewModeZ(sensor) {
-  const deck = sensor.deck;
-  const deckZ = state.geometry.view_modes[state.viewMode].deck_centers[deck] * SCALE;
-  return deckZ + SIDE_Z[sensor.side];
-}
 
 function glyphColor(sensor, isHigh, isSelected) {
   if (isSelected) return COLOR.selected;
