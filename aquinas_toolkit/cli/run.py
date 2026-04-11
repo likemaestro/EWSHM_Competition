@@ -170,12 +170,20 @@ def _run_stage(stage: str, run_context: RunContext) -> None:
 
 
 def _execute_stage(stage: str, run_context: RunContext) -> None:
-    """Dispatch stage execution to the future stage implementation."""
-    target = STAGE_PACKAGE_DIRS[stage]
-    raise StageNotImplementedError(
-        f"Not yet implemented. See aquinas_toolkit/{target}/ "
-        f"(run {run_context.run_id}, config {run_context.config_path})."
-    )
+    """Dispatch stage execution to the registered stage implementation."""
+    if stage not in _STAGE_REGISTRY:
+        target = STAGE_PACKAGE_DIRS[stage]
+        raise StageNotImplementedError(
+            f"Not yet implemented. See aquinas_toolkit/{target}/ "
+            f"(run {run_context.run_id}, config {run_context.config_path})."
+        )
+
+    import importlib
+
+    module_path, func_name = _STAGE_REGISTRY[stage].split(":")
+    module = importlib.import_module(module_path)
+    fn = getattr(module, func_name)
+    fn(run_context)
 
 
 def _refresh_visualization_bundle(run_context: RunContext) -> None:
