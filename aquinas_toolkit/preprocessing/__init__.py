@@ -9,6 +9,11 @@ from aquinas_toolkit.preprocessing.core import (
 )
 from aquinas_toolkit.preprocessing.organizer import OrganizerQueryResult, run_organizer_query
 from aquinas_toolkit.preprocessing.pipeline import export_aligned_event, run_preprocessing
+from aquinas_toolkit.preprocessing.store import (
+    LegacyPreprocessCsvReader,
+    PreprocessStoreReader,
+    open_preprocess_store,
+)
 from aquinas_toolkit.preprocessing.zeroing import (
     zero_loaded_event_group,
     zero_waveform,
@@ -29,6 +34,7 @@ from aquinas_toolkit.preprocessing.duration import (
 __all__ = [
     "AlignedEvent",
     "LoadedEventGroup",
+    "LegacyPreprocessCsvReader",
     "OrganizerQueryResult",
     "align_event_group",
     "export_aligned_event",
@@ -37,6 +43,8 @@ __all__ = [
     "load_timestamp_query_frames",
     "run_preprocessing",
     "run_organizer_query",
+    "open_preprocess_store",
+    "PreprocessStoreReader",
     "synchro_indices",
     "zero_loaded_event_group",
     "zero_waveform",

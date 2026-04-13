@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from aquinas_toolkit.feature_extraction.fdd import (
@@ -33,6 +35,17 @@ class FilteredEventCollection:
     selected_events: pd.DataFrame
     filtered_events: list[pd.DataFrame]
     channel_names: list[str]
+
+
+@dataclass(frozen=True)
+class PreprocessedEventCollection:
+    """Aligned event matrices collected from a preprocess stage store."""
+
+    available_events: pd.DataFrame
+    selected_events: pd.DataFrame
+    aligned_events: list[pd.DataFrame]
+    channel_names: list[str]
+    detail: str = ""
 
 
 def collect_filtered_event_matrices(
@@ -91,6 +104,135 @@ def collect_filtered_event_matrices(
         selected_events=selected_events,
         filtered_events=filtered_events,
         channel_names=channel_names,
+    )
+
+
+def collect_preprocessed_event_matrices(
+    preprocess_store: Any,
+    *,
+    set_name: str | None = None,
+    deck: str | None = None,
+    quantity: str = "ACC",
+    axis: str = "Z",
+    min_common_events: int = 2,
+    max_events: int | None = 5,
+) -> PreprocessedEventCollection:
+    """Collect aligned event matrices from preprocess outputs for notebook and stage reuse."""
+    retained_events = preprocess_store.iter_retained_events(set_name=set_name, deck=deck)
+    if retained_events.empty:
+        return PreprocessedEventCollection(
+            available_events=retained_events.copy(),
+            selected_events=retained_events.copy(),
+            aligned_events=[],
+            channel_names=[],
+            detail="no retained events",
+        )
+
+    candidate_rows: list[dict[str, Any]] = []
+    candidate_sensor_sets: list[set[str]] = []
+    candidate_sensor_orders: dict[str, int] = {}
+
+    for event in retained_events.itertuples(index=False):
+        event_sensors = preprocess_store.load_event_sensors(event.event_id)
+        event_sensors = event_sensors.loc[event_sensors["sensor_status"] == "included"].copy()
+        matching: list[tuple[str, int]] = []
+        for sensor in event_sensors.itertuples(index=False):
+            metadata = _parse_sensor_name(str(sensor.sensor_name))
+            if metadata["quantity"] == quantity and metadata["axis"] == axis:
+                matching.append((str(sensor.sensor_name), int(sensor.sensor_order)))
+        if len(matching) < 2:
+            continue
+        sensor_names = {sensor_name for sensor_name, _ in matching}
+        candidate_rows.append(
+            {
+                "event_id": str(event.event_id),
+                "set_name": str(event.set_name),
+                "deck": str(event.deck),
+                "start_time_utc": event.start_time_utc,
+                "end_time_utc": event.end_time_utc,
+                "available_channel_count": len(sensor_names),
+            }
+        )
+        candidate_sensor_sets.append(sensor_names)
+        for sensor_name, sensor_order in matching:
+            candidate_sensor_orders.setdefault(sensor_name, sensor_order)
+
+    available_events = pd.DataFrame(candidate_rows)
+    if available_events.empty:
+        return PreprocessedEventCollection(
+            available_events=available_events,
+            selected_events=available_events.copy(),
+            aligned_events=[],
+            channel_names=[],
+            detail=f"insufficient common {quantity}_{axis} events",
+        )
+
+    if max_events is None:
+        selected_candidates = available_events.copy()
+        selected_sensor_sets = candidate_sensor_sets
+    else:
+        selected_candidates = available_events.head(max_events).copy()
+        selected_sensor_sets = candidate_sensor_sets[: len(selected_candidates.index)]
+
+    if len(selected_candidates.index) < min_common_events:
+        return PreprocessedEventCollection(
+            available_events=available_events,
+            selected_events=selected_candidates,
+            aligned_events=[],
+            channel_names=[],
+            detail=f"insufficient common {quantity}_{axis} events",
+        )
+
+    common_channels = sorted(
+        set.intersection(*selected_sensor_sets),
+        key=lambda sensor_name: candidate_sensor_orders[sensor_name],
+    )
+    if len(common_channels) < 2:
+        return PreprocessedEventCollection(
+            available_events=available_events,
+            selected_events=selected_candidates,
+            aligned_events=[],
+            channel_names=common_channels,
+            detail=f"insufficient common {quantity}_{axis} channels",
+        )
+
+    aligned_events: list[pd.DataFrame] = []
+    used_rows: list[dict[str, Any]] = []
+    for event in selected_candidates.itertuples(index=False):
+        aligned_event = preprocess_store.load_aligned_event(event.event_id, sensor_names=common_channels)
+        if aligned_event.empty:
+            continue
+        numeric = aligned_event[common_channels].dropna(axis=0, how="any").reset_index(drop=True)
+        if len(numeric.index) < 2:
+            continue
+        aligned_events.append(numeric)
+        used_rows.append(
+            {
+                "event_id": str(event.event_id),
+                "set_name": str(event.set_name),
+                "deck": str(event.deck),
+                "start_time_utc": event.start_time_utc,
+                "end_time_utc": event.end_time_utc,
+                "channel_count": len(common_channels),
+                "row_count": int(len(numeric.index)),
+            }
+        )
+
+    selected_events = pd.DataFrame(used_rows)
+    if len(aligned_events) < min_common_events:
+        return PreprocessedEventCollection(
+            available_events=available_events,
+            selected_events=selected_events,
+            aligned_events=[],
+            channel_names=common_channels,
+            detail=f"insufficient {quantity}_{axis} events after dropping missing rows",
+        )
+
+    return PreprocessedEventCollection(
+        available_events=available_events,
+        selected_events=selected_events,
+        aligned_events=aligned_events,
+        channel_names=common_channels,
     )
 
 
@@ -173,16 +315,14 @@ def run_acc_z_fdd_workflow(
     if not filtered.filtered_events:
         raise ValueError("No common filtered events were found for the requested workflow.")
 
-    fdd_result = frequency_domain_decomposition(
+    summary = run_acc_z_fdd_from_event_matrices(
         filtered.filtered_events,
+        channel_names=filtered.channel_names,
         sampling_rate_hz=sampling_rate_hz,
+        low_hz=low_hz,
+        high_hz=high_hz,
         nperseg=nperseg,
         noverlap=noverlap,
-    )
-    summary = summarize_fdd_results(
-        fdd_result,
-        channel_names=filtered.channel_names,
-        frequency_band_hz=(low_hz, high_hz),
         n_peaks=n_peaks,
     )
     summary.update(
@@ -195,6 +335,82 @@ def run_acc_z_fdd_workflow(
         }
     )
     return summary
+
+
+def run_acc_z_fdd_from_preprocess_store(
+    preprocess_store: Any,
+    *,
+    set_name: str | None = None,
+    deck: str | None = None,
+    min_common_events: int = 2,
+    max_events: int | None = 5,
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    nperseg: int = 1024,
+    noverlap: int = 512,
+    n_peaks: int = 3,
+) -> dict[str, object]:
+    """Run the preserved ACC_Z FDD workflow from preprocess-stage artifacts."""
+    collection = collect_preprocessed_event_matrices(
+        preprocess_store,
+        set_name=set_name,
+        deck=deck,
+        quantity="ACC",
+        axis="Z",
+        min_common_events=min_common_events,
+        max_events=max_events,
+    )
+    if not collection.aligned_events:
+        raise ValueError(collection.detail or "No common aligned ACC_Z events were found in preprocess outputs.")
+
+    summary = run_acc_z_fdd_from_event_matrices(
+        collection.aligned_events,
+        channel_names=collection.channel_names,
+        sampling_rate_hz=sampling_rate_hz,
+        low_hz=low_hz,
+        high_hz=high_hz,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        n_peaks=n_peaks,
+    )
+    summary.update(
+        {
+            "dataset": set_name if set_name is not None else "ALL",
+            "deck": deck.upper() if deck is not None else "ALL",
+            "available_events": collection.available_events,
+            "selected_events": collection.selected_events,
+            "aligned_events": collection.aligned_events,
+            "detail": collection.detail,
+        }
+    )
+    return summary
+
+
+def run_acc_z_fdd_from_event_matrices(
+    waveform_matrices: Sequence[pd.DataFrame | np.ndarray],
+    *,
+    channel_names: Sequence[str],
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    nperseg: int = 1024,
+    noverlap: int = 512,
+    n_peaks: int = 3,
+) -> dict[str, object]:
+    """Run the notebook-preserved ACC_Z FDD summary on prepared waveform matrices."""
+    fdd_result = frequency_domain_decomposition(
+        waveform_matrices,
+        sampling_rate_hz=sampling_rate_hz,
+        nperseg=nperseg,
+        noverlap=noverlap,
+    )
+    return summarize_fdd_results(
+        fdd_result,
+        channel_names=channel_names,
+        frequency_band_hz=(low_hz, high_hz),
+        n_peaks=n_peaks,
+    )
 
 
 def _pivot_mode_shape_table(
@@ -213,3 +429,15 @@ def _pivot_mode_shape_table(
         for peak_rank in table.columns
     ]
     return table
+
+
+def _parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
+    parts = sensor_name.split("_")
+    return {
+        "deck": parts[0] if len(parts) > 0 else None,
+        "span": parts[1] if len(parts) > 1 else None,
+        "side": parts[2] if len(parts) > 2 else None,
+        "location": parts[3] if len(parts) > 3 else None,
+        "quantity": parts[4] if len(parts) > 4 else None,
+        "axis": parts[5] if len(parts) > 5 else None,
+    }

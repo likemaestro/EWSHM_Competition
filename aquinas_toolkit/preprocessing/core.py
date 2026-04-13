@@ -201,6 +201,7 @@ def prepare_sensor_records(reader: AquinasReader) -> pd.DataFrame:
     records["set_name"] = records["dataset"]
     records["deck"] = records["sensor_name"].map(derive_deck)
     records["sensor_order"] = records["sensor_name"].map(sensor_order_map)
+    records["table_row_index"] = range(len(records))
     records["start_time_utc"] = pd.to_datetime(records[start_time_col], utc=True, format="mixed")
     records["end_time_utc"] = pd.to_datetime(records[end_time_col], utc=True, format="mixed")
     records["raw_file"] = records[file_col]

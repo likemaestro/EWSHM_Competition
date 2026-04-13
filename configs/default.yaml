@@ -48,17 +48,29 @@ preprocessing:
     method: r_synchro               # only supported method; mirrors AQUINAS_Explorer.R Synchro()
   filtering:
     min_active_sensors_per_event: 1
-  export:
-    format: csv.gz
-    partition_by: [set_name, deck]
+  storage:
+    backend: sqlite
+  exports:
+    aligned_waveforms:
+      enabled: false
+      format: csv.gz
 
 # ---------------------------------------------------------------------------
-# Feature extraction  (TODO)
+# Feature extraction
 # ---------------------------------------------------------------------------
-# features:
-#   time_domain: [rms, peak_to_peak, kurtosis, skewness]
-#   freq_domain: [dominant_freq, spectral_centroid]
-#   use_index_table_features: true
+features:
+  sampling_rate_hz: 100.0
+  modal_analysis:
+    enabled: true
+    quantity: ACC
+    axis: Z
+    min_common_events: 2
+    max_events: 5
+    low_hz: 0.5
+    high_hz: 20.0
+    nperseg: 1024
+    noverlap: 512
+    n_peaks: 3
 
 # ---------------------------------------------------------------------------
 # Unsupervised model  (TODO)

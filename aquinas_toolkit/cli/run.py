@@ -35,6 +35,7 @@ STAGE_PACKAGE_DIRS = {
 # Add an entry here when a new stage is implemented; no other changes needed.
 _STAGE_REGISTRY: dict[str, str] = {
     "preprocess": "aquinas_toolkit.preprocessing:run_preprocessing",
+    "features": "aquinas_toolkit.feature_extraction:run_features",
 }
 
 

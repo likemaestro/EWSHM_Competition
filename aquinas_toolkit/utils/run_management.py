@@ -186,6 +186,15 @@ def write_metadata(run_dir: Path, metadata: dict[str, Any]) -> None:
     write_json_atomic(run_dir / METADATA_NAME, metadata)
 
 
+def write_stage_progress(run_dir: Path, stage: str, progress: dict[str, Any]) -> None:
+    """Persist stage-local progress details without changing terminal status."""
+    metadata = read_metadata(run_dir)
+    stage_state = dict(metadata["stages"][stage])
+    stage_state["progress"] = progress
+    metadata["stages"][stage] = stage_state
+    write_metadata(run_dir, metadata)
+
+
 def stage_output_dir(run_dir: Path, stage: str) -> Path:
     """Return the stage output directory for a run."""
     ensure_valid_stage(stage)
@@ -250,6 +259,7 @@ def mark_stage_completed(run_dir: Path, stage: str) -> None:
         )
 
     metadata["stages"][stage] = {
+        **_preserve_stage_extensions(stage_state),
         "status": "completed",
         "started_at_utc": stage_state["started_at_utc"],
         "completed_at_utc": utc_timestamp(),
@@ -263,6 +273,7 @@ def mark_stage_failed(run_dir: Path, stage: str, error: str) -> None:
     metadata = read_metadata(run_dir)
     stage_state = metadata["stages"][stage]
     metadata["stages"][stage] = {
+        **_preserve_stage_extensions(stage_state),
         "status": "failed",
         "started_at_utc": stage_state.get("started_at_utc"),
         "completed_at_utc": utc_timestamp(),
@@ -279,6 +290,11 @@ def new_stage_state() -> dict[str, Any]:
         "completed_at_utc": None,
         "error": None,
     }
+
+
+def _preserve_stage_extensions(stage_state: dict[str, Any]) -> dict[str, Any]:
+    core_keys = {"status", "started_at_utc", "completed_at_utc", "error"}
+    return {key: value for key, value in stage_state.items() if key not in core_keys}
 
 
 def git_commit() -> str | None:

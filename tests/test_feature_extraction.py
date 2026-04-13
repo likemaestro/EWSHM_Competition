@@ -1,12 +1,202 @@
+import json
+import math
+import shutil
+import sqlite3
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
+from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.feature_extraction import (
+    open_features_store,
     annotate_mode_shape_locations,
+    run_acc_z_fdd_from_preprocess_store,
     frequency_domain_decomposition,
     summarize_fdd_mode_shapes,
     summarize_fdd_peaks,
 )
+from aquinas_toolkit.preprocessing import open_preprocess_store
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_yaml(path: Path, lines: list[str]) -> None:
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_feature_pipeline_config(workspace: Path) -> None:
+    config_dir = workspace / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _write_yaml(
+        config_dir / "default.yaml",
+        [
+            "data:",
+            "  dataset_root: AQUINAS_DATASET",
+            "  sets:",
+            "    - AQUINAS_SET1_2022_07",
+            "preprocessing:",
+            "  event_grouping:",
+            "    key_fields: [deck, Start_Time, End_Time]",
+            "  alignment:",
+            "    method: r_synchro",
+            "  zeroing:",
+            "    method: linear_endpoints",
+            "  filtering:",
+            "    min_active_sensors_per_event: 1",
+            "  storage:",
+            "    backend: sqlite",
+            "  exports:",
+            "    aligned_waveforms:",
+            "      enabled: false",
+            "      format: csv.gz",
+            "features:",
+            "  sampling_rate_hz: 100.0",
+            "  modal_analysis:",
+            "    enabled: true",
+            "    quantity: ACC",
+            "    axis: Z",
+            "    min_common_events: 2",
+            "    max_events: 5",
+            "    low_hz: 0.5",
+            "    high_hz: 20.0",
+            "    nperseg: 128",
+            "    noverlap: 64",
+            "    n_peaks: 3",
+            "output:",
+            "  results_dir: results",
+        ],
+    )
+
+
+def _build_feature_stage_dataset(workspace: Path) -> Path:
+    dataset_root = workspace / "AQUINAS_DATASET"
+    set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+    set_dir.mkdir(parents=True, exist_ok=True)
+
+    first_start = pd.Timestamp("2022-07-01T00:00:00Z")
+    second_start = pd.Timestamp("2022-07-01T00:01:00Z")
+    sample_count = 200
+    dt_seconds = 0.01
+    time_axis = np.arange(sample_count, dtype=float) * dt_seconds
+
+    all_timestamps = _event_timestamps(first_start, sample_count, dt_seconds) + _event_timestamps(
+        second_start, sample_count, dt_seconds
+    )
+
+    new_acc_1 = np.concatenate(
+        [
+            np.sin(2 * np.pi * 3.0 * time_axis),
+            1.05 * np.sin(2 * np.pi * 3.0 * time_axis + 0.1),
+        ]
+    )
+    new_acc_2 = np.concatenate(
+        [
+            0.8 * np.sin(2 * np.pi * 3.0 * time_axis + 0.3),
+            0.9 * np.sin(2 * np.pi * 3.0 * time_axis + 0.5),
+        ]
+    )
+    new_str = np.concatenate(
+        [
+            0.2 + 0.01 * np.arange(sample_count),
+            0.5 + 0.01 * np.arange(sample_count),
+        ]
+    )
+    old_acc = np.concatenate(
+        [
+            0.7 * np.sin(2 * np.pi * 3.0 * time_axis - 0.2),
+            0.65 * np.sin(2 * np.pi * 3.0 * time_axis - 0.1),
+        ]
+    )
+
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="NEW_S1_DO_MID_ACC_Z",
+        values=new_acc_1.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="NEW_S1_UP_MID_ACC_Z",
+        values=new_acc_2.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="NEW_S1_DO_INF_STR",
+        values=new_str.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="OLD_S1_DO_MID_ACC_Z",
+        values=old_acc.tolist(),
+        timestamps=all_timestamps,
+    )
+
+    return dataset_root
+
+
+def _event_timestamps(start: pd.Timestamp, sample_count: int, dt_seconds: float) -> list[str]:
+    return [
+        (start + pd.to_timedelta(index * dt_seconds, unit="s")).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        for index in range(sample_count)
+    ]
+
+
+def _write_sensor_with_two_events(
+    set_dir: Path,
+    *,
+    sensor_name: str,
+    values: list[float],
+    timestamps: list[str],
+) -> None:
+    sensor_dir = set_dir / sensor_name
+    sensor_dir.mkdir()
+    file_name = f"{sensor_name}_SET1_1.json"
+    table_path = set_dir / f"TABLE_{sensor_name}_SET1.json"
+
+    sample_count = len(values) // 2
+    first_segment = values[:sample_count]
+    second_segment = values[sample_count:]
+    start_times = [timestamps[0], timestamps[sample_count]]
+    end_times = [timestamps[sample_count - 1], timestamps[-1]]
+    duration = round((sample_count - 1) * 0.01, 2)
+
+    _write_json(
+        table_path,
+        {
+            "Record_UID": [1, 2],
+            "File": [file_name, file_name],
+            "Start_Row": [1, sample_count + 1],
+            "End_Row": [sample_count, sample_count * 2],
+            "Start_Time": start_times,
+            "End_Time": end_times,
+            "Duration": [duration, duration],
+            "Start_Value": [first_segment[0], second_segment[0]],
+            "End_Value": [first_segment[-1], second_segment[-1]],
+            "Diff_Value": [first_segment[-1] - first_segment[0], second_segment[-1] - second_segment[0]],
+            "Min_Value": [float(np.min(first_segment)), float(np.min(second_segment))],
+            "Max_Value": [float(np.max(first_segment)), float(np.max(second_segment))],
+            "Mean_Value": [float(np.mean(first_segment)), float(np.mean(second_segment))],
+            "Range": [
+                float(np.max(first_segment) - np.min(first_segment)),
+                float(np.max(second_segment) - np.min(second_segment)),
+            ],
+            "Temperature": [21.0, 22.0],
+        },
+    )
+    _write_json(
+        sensor_dir / file_name,
+        {
+            "timestamp": timestamps,
+            sensor_name: values,
+        },
+    )
 
 
 def test_frequency_domain_decomposition_finds_dominant_mode_near_target_frequency() -> None:
@@ -110,3 +300,160 @@ def test_annotate_mode_shape_locations_extracts_structural_position_fields() -> 
     assert list(annotated["quantity"]) == ["ACC", "ACC"]
     assert list(annotated["axis"]) == ["Z", "Z"]
     assert list(annotated["position_label"]) == ["S1_DO_INT", "S2_UP_MID"]
+
+
+def test_run_features_creates_sqlite_feature_store_and_modal_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    features_dir = tmp_path / "results" / latest["run_id"] / "stages" / "features"
+    features_db = features_dir / "features.sqlite"
+
+    assert features_db.is_file()
+    with open_features_store(features_dir) as store:
+        sensor_features = store.load_sensor_event_features()
+        modal_peaks = store.load_deck_modal_peaks()
+        mode_shapes = store.load_deck_mode_shape_components()
+        family_status = store.load_feature_family_status()
+
+    assert {"ACC", "STR"} <= set(sensor_features["quantity"].dropna())
+    assert {"waveform_rms", "table_temperature"} <= set(sensor_features.columns)
+    assert sensor_features["sample_count"].min() > 0
+    assert set(sensor_features["deck"]) == {"NEW", "OLD"}
+    assert not modal_peaks.empty
+    assert set(modal_peaks["deck"]) == {"NEW"}
+    assert not mode_shapes.empty
+
+    new_status = family_status.loc[family_status["deck"] == "NEW"].iloc[0]
+    old_status = family_status.loc[family_status["deck"] == "OLD"].iloc[0]
+    assert new_status["status"] == "completed"
+    assert old_status["status"] == "skipped"
+    assert "insufficient common ACC_Z" in old_status["detail"]
+
+
+def test_run_acc_z_fdd_from_preprocess_store_reads_canonical_preprocess_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+    with open_preprocess_store(preprocess_dir) as store:
+        summary = run_acc_z_fdd_from_preprocess_store(
+            store,
+            set_name="AQUINAS_SET1_2022_07",
+            deck="NEW",
+            min_common_events=2,
+            max_events=5,
+            sampling_rate_hz=100.0,
+            low_hz=0.5,
+            high_hz=20.0,
+            nperseg=128,
+            noverlap=64,
+            n_peaks=3,
+        )
+
+    assert summary["deck"] == "NEW"
+    assert not summary["peak_table"].empty
+    assert not summary["available_events"].empty
+    assert not summary["selected_events"].empty
+    assert len(summary["aligned_events"]) == len(summary["selected_events"])
+    assert len(summary["channel_names"]) >= 2
+
+
+def test_run_features_can_read_legacy_preprocess_csv_artifacts_temporarily(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    original_run_dir = tmp_path / "results" / latest["run_id"]
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    _materialize_legacy_preprocess_artifacts(preprocess_dir)
+
+    legacy_run_id = f"{latest['run_id']}_legacy_csv"
+    legacy_run_dir = tmp_path / "results" / legacy_run_id
+    shutil.copytree(original_run_dir, legacy_run_dir)
+
+    legacy_preprocess_dir = legacy_run_dir / "stages" / "preprocess"
+    (legacy_preprocess_dir / "preprocess.sqlite").unlink()
+    for sidecar in ("preprocess.sqlite-wal", "preprocess.sqlite-shm"):
+        sidecar_path = legacy_preprocess_dir / sidecar
+        if sidecar_path.exists():
+            sidecar_path.unlink()
+
+    latest["run_id"] = legacy_run_id
+    (tmp_path / "results" / "latest.json").write_text(json.dumps(latest), encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features"])
+    run_mod.run()
+
+    features_dir = legacy_run_dir / "stages" / "features"
+    with open_features_store(features_dir) as store:
+        sensor_features = store.load_sensor_event_features()
+        family_status = store.load_feature_family_status()
+
+    assert not sensor_features.empty
+    assert "table_duration" in sensor_features.columns
+    assert set(family_status["status"]) >= {"completed", "skipped"}
+
+
+def _materialize_legacy_preprocess_artifacts(preprocess_dir: Path) -> None:
+    preprocess_db = preprocess_dir / "preprocess.sqlite"
+    with open_preprocess_store(preprocess_dir) as store:
+        events = store.list_events()
+        retained = store.iter_retained_events()
+    with sqlite3.connect(preprocess_db) as conn:
+        sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
+
+    legacy_manifest = events.copy()
+    legacy_manifest["active_sensors"] = legacy_manifest["active_sensors"].map(";".join)
+    legacy_manifest["excluded_sensors"] = legacy_manifest["excluded_sensors"].map(";".join)
+    legacy_manifest["excluded_sensor_reasons"] = legacy_manifest["excluded_sensor_reasons"].map(";".join)
+    legacy_manifest.to_csv(preprocess_dir / "event_manifest.csv", index=False)
+    sensor_records.to_csv(preprocess_dir / "sensor_records.csv", index=False)
+
+    aligned_dir = preprocess_dir / "aligned"
+    aligned_dir.mkdir(parents=True, exist_ok=True)
+    with open_preprocess_store(preprocess_dir) as store:
+        for set_name, deck in (
+            retained[["set_name", "deck"]]
+            .drop_duplicates()
+            .itertuples(index=False, name=None)
+        ):
+            partition_events = retained.loc[
+                (retained["set_name"] == set_name) & (retained["deck"] == deck)
+            ]
+            frames = []
+            for event_id in partition_events["event_id"]:
+                frame = store.load_aligned_event(event_id)
+                frame = frame.copy()
+                frame.insert(0, "sample_index", range(len(frame)))
+                frame.insert(0, "event_id", event_id)
+                frames.append(frame)
+            partition = pd.concat(frames, ignore_index=True)
+            partition["timestamp_utc"] = partition["timestamp_utc"].dt.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"
+            partition.to_csv(aligned_dir / f"{set_name}__{deck}_DECK.csv.gz", index=False, compression="gzip")

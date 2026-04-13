@@ -98,6 +98,9 @@ notebook takes the conditioned waveforms and derives modal features.
 
 - Runs `run_acc_z_fdd_workflow()` from `aquinas_toolkit.feature_extraction`
   for each SET/deck combination.
+- Also includes a run-backed section that reads snapped preprocess outputs via
+  `open_preprocess_store()` and re-runs ACC_Z FDD from `preprocess.sqlite`
+  or the temporary legacy CSV / CSV.GZ compatibility path.
 - Extracts dominant FDD peaks from the first singular-value curve inside the
   0.5–20 Hz band.
 - Displays signed and absolute mode-shape summaries annotated by structural

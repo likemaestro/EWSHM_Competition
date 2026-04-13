@@ -251,6 +251,55 @@ def test_mark_stage_failed_preserves_started_timestamp(
     assert stage_state["completed_at_utc"] is not None
 
 
+def test_mark_stage_terminal_transitions_preserve_progress_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    run_context = run_management.create_run()
+    run_management.mark_stage_started(run_context.run_dir, "preprocess")
+    run_management.write_stage_progress(
+        run_context.run_dir,
+        "preprocess",
+        {
+            "current_set": "AQUINAS_SET1_2022_07",
+            "completed_sets": [],
+            "written_partitions": [],
+        },
+    )
+
+    run_management.mark_stage_completed(run_context.run_dir, "preprocess")
+    completed_state = run_management.read_metadata(run_context.run_dir)["stages"]["preprocess"]
+
+    assert completed_state["status"] == "completed"
+    assert completed_state["progress"] == {
+        "current_set": "AQUINAS_SET1_2022_07",
+        "completed_sets": [],
+        "written_partitions": [],
+    }
+
+    run_management.mark_stage_started(run_context.run_dir, "features")
+    run_management.write_stage_progress(
+        run_context.run_dir,
+        "features",
+        {
+            "current_set": "chunk-1",
+            "completed_sets": ["chunk-0"],
+            "written_partitions": ["chunk-0"],
+        },
+    )
+    run_management.mark_stage_failed(run_context.run_dir, "features", "boom")
+    failed_state = run_management.read_metadata(run_context.run_dir)["stages"]["features"]
+
+    assert failed_state["status"] == "failed"
+    assert failed_state["progress"] == {
+        "current_set": "chunk-1",
+        "completed_sets": ["chunk-0"],
+        "written_partitions": ["chunk-0"],
+    }
+
+
 def test_mark_stage_started_allows_retry_after_failure_and_clears_terminal_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

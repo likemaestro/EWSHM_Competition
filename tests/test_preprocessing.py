@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -12,11 +13,13 @@ from aquinas_toolkit.preprocessing import (
     align_event_group,
     find_events,
     load_event_group,
+    open_preprocess_store,
     run_organizer_query,
     synchro_indices,
     zero_loaded_event_group,
     zero_waveform,
 )
+from aquinas_toolkit.preprocessing import pipeline as pipeline_mod
 from aquinas_toolkit.preprocessing.pipeline import load_preprocessing_settings
 from aquinas_toolkit.preprocessing.signals import (
     bandpass_filter_waveform_matrix,
@@ -37,6 +40,7 @@ def _write_default_preprocess_config(
     *,
     set_names: tuple[str, ...] = ("AQUINAS_SET1_2022_07",),
     min_active_sensors_per_event: int = 1,
+    aligned_export_enabled: bool = False,
     export_format: str = "csv.gz",
 ) -> None:
     lines = [
@@ -56,9 +60,12 @@ def _write_default_preprocess_config(
             "    method: linear_endpoints",
             "  filtering:",
             f"    min_active_sensors_per_event: {min_active_sensors_per_event}",
-            "  export:",
-            f"    format: {export_format}",
-            "    partition_by: [set_name, deck]",
+            "  storage:",
+            "    backend: sqlite",
+            "  exports:",
+            "    aligned_waveforms:",
+            f"      enabled: {str(aligned_export_enabled).lower()}",
+            f"      format: {export_format}",
             "output:",
             "  results_dir: results",
         ]
@@ -66,6 +73,14 @@ def _write_default_preprocess_config(
     config_dir = workspace / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
     _write_yaml(config_dir / "default.yaml", lines)
+
+
+def _fetch_table_names(db_path: Path) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    return {row[0] for row in rows}
 
 
 def _build_preprocessing_dataset(workspace: Path) -> Path:
@@ -154,6 +169,105 @@ def _build_preprocessing_dataset(workspace: Path) -> Path:
         ],
         values=[9.0, 9.5, 10.0, 10.5],
     )
+
+    return dataset_root
+
+
+def _build_two_set_preprocessing_dataset(workspace: Path) -> Path:
+    dataset_root = workspace / "AQUINAS_DATASET"
+    set_specs = [
+        ("AQUINAS_SET1_2022_07", "SET1", 10.0, 1.0, 5.0, 9.0),
+        ("AQUINAS_SET2_2023_04", "SET2", 50.0, 4.0, 8.0, 12.0),
+    ]
+
+    for set_name, set_id, inf_base, acc_base, sup_base, old_base in set_specs:
+        set_dir = dataset_root / set_name
+        set_dir.mkdir(parents=True, exist_ok=True)
+        _write_sensor(
+            set_dir,
+            "NEW_S1_DO_INF_STR",
+            table_payload={
+                "Record_UID": [1001],
+                "File": [f"NEW_S1_DO_INF_STR_{set_id}_1.json"],
+                "Start_Row": [1],
+                "End_Row": [4],
+                "Start_Time": ["2022-07-01 00:00:00"],
+                "End_Time": ["2022-07-01 00:00:03"],
+                "Duration": [3.0],
+                "Temperature": [21.5],
+            },
+            timestamps=[
+                "2022-07-01 00:00:00.000",
+                "2022-07-01 00:00:01.000",
+                "2022-07-01 00:00:02.000",
+                "2022-07-01 00:00:03.000",
+            ],
+            values=[inf_base, inf_base + 11.0, inf_base + 20.0, inf_base + 30.0],
+            set_id=set_id,
+        )
+        _write_sensor(
+            set_dir,
+            "NEW_S1_DO_MID_ACC_Z",
+            table_payload={
+                "Record_UID": [1002],
+                "File": [f"NEW_S1_DO_MID_ACC_Z_{set_id}_1.json"],
+                "Start_Row": [1],
+                "End_Row": [3],
+                "Start_Time": ["2022-07-01 00:00:00"],
+                "End_Time": ["2022-07-01 00:00:03"],
+                "Duration": [3.0],
+                "Temperature": [21.5],
+            },
+            timestamps=[
+                "2022-07-01 00:00:00.200",
+                "2022-07-01 00:00:01.200",
+                "2022-07-01 00:00:02.200",
+            ],
+            values=[acc_base, acc_base + 1.0, acc_base + 2.0],
+            set_id=set_id,
+        )
+        _write_sensor(
+            set_dir,
+            "NEW_S1_DO_SUP_STR",
+            table_payload={
+                "Record_UID": [1003],
+                "File": [f"NEW_S1_DO_SUP_STR_{set_id}_1.json"],
+                "Start_Row": [1],
+                "End_Row": [2],
+                "Start_Time": ["2022-07-01 00:00:00"],
+                "End_Time": ["2022-07-01 00:00:03"],
+                "Duration": [3.0],
+                "Temperature": [21.5],
+            },
+            timestamps=[
+                "2022-07-01 00:00:00.100",
+                "2022-07-01 00:00:02.100",
+            ],
+            values=[sup_base, sup_base + 2.0],
+            set_id=set_id,
+        )
+        _write_sensor(
+            set_dir,
+            "OLD_S1_DO_INF_STR",
+            table_payload={
+                "Record_UID": [2001],
+                "File": [f"OLD_S1_DO_INF_STR_{set_id}_1.json"],
+                "Start_Row": [1],
+                "End_Row": [4],
+                "Start_Time": ["2022-07-01 00:00:00"],
+                "End_Time": ["2022-07-01 00:00:03"],
+                "Duration": [3.0],
+                "Temperature": [19.0],
+            },
+            timestamps=[
+                "2022-07-01 00:00:00.001",
+                "2022-07-01 00:00:01.001",
+                "2022-07-01 00:00:02.001",
+                "2022-07-01 00:00:03.001",
+            ],
+            values=[old_base, old_base + 0.5, old_base + 1.0, old_base + 1.5],
+            set_id=set_id,
+        )
 
     return dataset_root
 
@@ -603,7 +717,11 @@ def test_load_preprocessing_settings_rejects_legacy_alignment_keys(tmp_path: Pat
         load_preprocessing_settings(config_path)
 
 
-def test_run_preprocess_writes_stage_artifacts(monkeypatch, tmp_path: Path) -> None:
+def test_run_preprocess_writes_stage_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.chdir(tmp_path)
     _build_preprocessing_dataset(tmp_path)
     (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
@@ -623,9 +741,12 @@ def test_run_preprocess_writes_stage_artifacts(monkeypatch, tmp_path: Path) -> N
                 "    method: linear_endpoints",
                 "  filtering:",
                 "    min_active_sensors_per_event: 1",
-                "  export:",
-                "    format: csv.gz",
-                "    partition_by: [set_name, deck]",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: true",
+                "      format: csv.gz",
                 "output:",
                 "  results_dir: results",
             ]
@@ -636,17 +757,38 @@ def test_run_preprocess_writes_stage_artifacts(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
     run_mod.run()
+    captured = capsys.readouterr()
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-
-    manifest = pd.read_csv(preprocess_dir / "event_manifest.csv")
-    sensor_records = pd.read_csv(preprocess_dir / "sensor_records.csv")
+    metadata = json.loads((tmp_path / "results" / latest["run_id"] / "metadata.json").read_text(encoding="utf-8"))
+    preprocess_db = preprocess_dir / "preprocess.sqlite"
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
-    new_aligned = pd.read_csv(preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__NEW.csv.gz")
+    with sqlite3.connect(preprocess_db) as conn:
+        sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
 
-    assert (preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__NEW.csv.gz").is_file()
-    assert (preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__OLD.csv.gz").is_file()
+    with open_preprocess_store(preprocess_dir) as store:
+        manifest = store.list_events()
+        new_event_id = manifest.loc[manifest["deck"] == "NEW", "event_id"].iloc[0]
+        new_aligned = store.load_aligned_event(new_event_id)
+
+    assert preprocess_db.is_file()
+    assert _fetch_table_names(preprocess_db) >= {
+        "stage_info",
+        "sets",
+        "sensors",
+        "events",
+        "event_sensors",
+        "aligned_samples",
+        "sensor_records",
+        "sensor_qc",
+    }
+    assert (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv.gz"
+    ).is_file()
+    assert (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__OLD_DECK.csv.gz"
+    ).is_file()
     assert len(manifest) == 2
     assert sorted(manifest["discarded"].tolist()) == [False, False]
     assert "Temperature" in sensor_records.columns
@@ -655,7 +797,17 @@ def test_run_preprocess_writes_stage_artifacts(monkeypatch, tmp_path: Path) -> N
     assert summary["alignment"]["method"] == "r_synchro"
     assert summary["alignment"]["passes"] == 2
     assert summary["zeroing"]["stage"] == "before_alignment"
+    assert summary["storage"]["backend"] == "sqlite"
     assert len(new_aligned) == 2
+    assert "Writing aligned exports..." in captured.out
+    assert metadata["stages"]["preprocess"]["progress"] == {
+        "current_set": None,
+        "completed_sets": ["AQUINAS_SET1_2022_07"],
+        "written_partitions": [
+            "AQUINAS_SET1_2022_07__NEW_DECK",
+            "AQUINAS_SET1_2022_07__OLD_DECK",
+        ],
+    }
 
 
 def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report(
@@ -689,9 +841,12 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
                 "    method: linear_endpoints",
                 "  filtering:",
                 "    min_active_sensors_per_event: 1",
-                "  export:",
-                "    format: csv.gz",
-                "    partition_by: [set_name, deck]",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: true",
+                "      format: csv.gz",
                 "output:",
                 "  results_dir: results",
             ]
@@ -705,11 +860,13 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-
-    manifest = pd.read_csv(preprocess_dir / "event_manifest.csv")
-    sensor_records = pd.read_csv(preprocess_dir / "sensor_records.csv")
-    qc_report = pd.read_csv(preprocess_dir / "sensor_qc_report.csv")
+    preprocess_db = preprocess_dir / "preprocess.sqlite"
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(preprocess_db) as conn:
+        sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
+        qc_report = pd.read_sql_query("SELECT * FROM sensor_qc", conn)
+    with open_preprocess_store(preprocess_dir) as store:
+        manifest = store.list_events()
 
     set1_bad = sensor_records.loc[
         (sensor_records["set_name"] == "AQUINAS_SET1_2022_07")
@@ -730,14 +887,17 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
 
     set4_manifest = manifest.loc[manifest["set_name"] == "AQUINAS_SET4_2024_01"].iloc[0]
     set5_manifest = manifest.loc[manifest["set_name"] == "AQUINAS_SET5_2024_06"].iloc[0]
-    assert set4_manifest["excluded_sensors"] == "OLD_S1_UP_SUP_STR"
-    assert set5_manifest["excluded_sensors"] == "OLD_S1_UP_SUP_STR"
+    assert set4_manifest["excluded_sensors"] == ["OLD_S1_UP_SUP_STR"]
+    assert set5_manifest["excluded_sensors"] == ["OLD_S1_UP_SUP_STR"]
     assert int(set4_manifest["active_sensor_count"]) == 1
     assert int(set5_manifest["active_sensor_count"]) == 1
     assert set4_manifest["reference_sensor"] == "OLD_S1_UP_INF_STR"
 
-    set4_aligned = pd.read_csv(preprocess_dir / "aligned" / "AQUINAS_SET4_2024_01__OLD.csv.gz")
-    set1_aligned = pd.read_csv(preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__OLD.csv.gz")
+    with open_preprocess_store(preprocess_dir) as store:
+        set4_aligned = store.load_aligned_event(set4_manifest["event_id"])
+        set1_aligned = store.load_aligned_event(
+            manifest.loc[manifest["set_name"] == "AQUINAS_SET1_2022_07", "event_id"].iloc[0]
+        )
     assert "OLD_S1_UP_SUP_STR" not in set4_aligned.columns
     assert "OLD_S1_UP_SUP_STR" in set1_aligned.columns
 
@@ -760,6 +920,24 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
         "AQUINAS_SET4_2024_01": ["OLD_S1_UP_SUP_STR"],
         "AQUINAS_SET5_2024_06": ["OLD_S1_UP_SUP_STR"],
     }
+
+
+def test_run_preprocess_defaults_to_sqlite_without_optional_exports(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_preprocessing_dataset(tmp_path)
+    _write_default_preprocess_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+    assert (preprocess_dir / "preprocess.sqlite").is_file()
+    assert not (preprocess_dir / "exports").exists()
 
 
 @pytest.mark.parametrize(
@@ -861,6 +1039,40 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
             ],
             "must define at least one set",
             id="exclude-entry-missing-sets",
+        ),
+        pytest.param(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: linear_endpoints",
+                "  export:",
+                "    format: csv.gz",
+            ],
+            "Legacy preprocessing.export",
+            id="legacy-export-config",
+        ),
+        pytest.param(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: linear_endpoints",
+                "  storage:",
+                "    backend: parquet",
+            ],
+            "Unsupported preprocessing.storage.backend",
+            id="unsupported-storage-backend",
         ),
     ],
 )
@@ -1080,6 +1292,7 @@ def test_run_preprocess_records_insufficient_active_sensor_discards_and_writes_c
     _write_default_preprocess_config(
         tmp_path,
         min_active_sensors_per_event=2,
+        aligned_export_enabled=True,
         export_format="csv",
     )
 
@@ -1088,14 +1301,19 @@ def test_run_preprocess_records_insufficient_active_sensor_discards_and_writes_c
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-    manifest = pd.read_csv(preprocess_dir / "event_manifest.csv")
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+    with open_preprocess_store(preprocess_dir) as store:
+        manifest = store.list_events()
 
     old_event = manifest.loc[manifest["deck"] == "OLD"].iloc[0]
     assert bool(old_event["discarded"])
     assert old_event["discard_reason"] == "insufficient_active_sensors"
-    assert (preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__NEW.csv").is_file()
-    assert not (preprocess_dir / "aligned" / "AQUINAS_SET1_2022_07__NEW.csv.gz").exists()
+    assert (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv"
+    ).is_file()
+    assert not (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv.gz"
+    ).exists()
     assert summary["retained_events"] == 1
     assert summary["discard_reasons"] == {"insufficient_active_sensors": 1}
 
@@ -1113,8 +1331,10 @@ def test_run_preprocess_records_no_common_aligned_rows_discards(
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-    manifest = pd.read_csv(preprocess_dir / "event_manifest.csv")
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+    with open_preprocess_store(preprocess_dir) as store:
+        manifest = store.list_events()
+        samples = store.load_aligned_samples()
 
     assert len(manifest) == 1
     assert bool(manifest.loc[0, "discarded"])
@@ -1122,7 +1342,8 @@ def test_run_preprocess_records_no_common_aligned_rows_discards(
     assert int(manifest.loc[0, "rows_after_alignment"]) == 0
     assert summary["retained_events"] == 0
     assert summary["discard_reasons"] == {"no_common_aligned_rows": 1}
-    assert list((preprocess_dir / "aligned").iterdir()) == []
+    assert samples.empty
+    assert not (preprocess_dir / "exports").exists()
 
 
 def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
@@ -1138,11 +1359,13 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-
-    manifest = pd.read_csv(preprocess_dir / "event_manifest.csv")
-    sensor_records = pd.read_csv(preprocess_dir / "sensor_records.csv")
-    qc_report = pd.read_csv(preprocess_dir / "sensor_qc_report.csv")
+    preprocess_db = preprocess_dir / "preprocess.sqlite"
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+    with open_preprocess_store(preprocess_dir) as store:
+        manifest = store.list_events()
+    with sqlite3.connect(preprocess_db) as conn:
+        sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
+        qc_report = pd.read_sql_query("SELECT * FROM sensor_qc", conn)
 
     assert manifest.empty
     assert manifest.columns.tolist() == [
@@ -1165,6 +1388,7 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
     ]
     assert sensor_records.empty
     assert sensor_records.columns.tolist() == [
+        "table_row_index",
         "Record_UID",
         "File",
         "Start_Row",
@@ -1172,6 +1396,13 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
         "Start_Time",
         "End_Time",
         "Duration",
+        "Start_Value",
+        "End_Value",
+        "Diff_Value",
+        "Min_Value",
+        "Max_Value",
+        "Mean_Value",
+        "Range",
         "Temperature",
         "sensor_name",
         "dataset",
@@ -1207,4 +1438,91 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
     assert summary["total_events"] == 0
     assert summary["retained_events"] == 0
     assert summary["discard_reasons"] == {}
-    assert list((preprocess_dir / "aligned").iterdir()) == []
+    assert not (preprocess_dir / "exports").exists()
+
+
+def test_run_preprocess_writes_completed_sets_incrementally_and_preserves_progress_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_two_set_preprocessing_dataset(tmp_path)
+    _write_default_preprocess_config(
+        tmp_path,
+        set_names=("AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"),
+        aligned_export_enabled=True,
+    )
+
+    original_writer = pipeline_mod._write_set_aligned_partitions
+    call_count = 0
+
+    def fail_on_second_set(
+        aligned_dir: Path,
+        partitions: dict[tuple[str, str], list[pd.DataFrame]],
+        export_format: str,
+    ) -> list[str]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("simulated set write failure")
+        return original_writer(aligned_dir, partitions, export_format)
+
+    monkeypatch.setattr(pipeline_mod, "_write_set_aligned_partitions", fail_on_second_set)
+    monkeypatch.setattr(run_mod, "_refresh_visualization_bundle", lambda run_context: None)
+
+    exit_code = run_mod.run_command(stage="preprocess", name=None, run_id=None)
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    run_dir = tmp_path / "results" / latest["run_id"]
+    preprocess_dir = run_dir / "stages" / "preprocess"
+    metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv.gz"
+    ).is_file()
+    assert (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__OLD_DECK.csv.gz"
+    ).is_file()
+    assert not (
+        preprocess_dir / "exports" / "aligned" / "AQUINAS_SET2_2023_04__NEW_DECK.csv.gz"
+    ).exists()
+    assert metadata["stages"]["preprocess"]["status"] == "failed"
+    assert metadata["stages"]["preprocess"]["error"] == "simulated set write failure"
+    assert metadata["stages"]["preprocess"]["progress"] == {
+        "current_set": None,
+        "completed_sets": ["AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"],
+        "written_partitions": [
+            "AQUINAS_SET1_2022_07__NEW_DECK",
+            "AQUINAS_SET1_2022_07__OLD_DECK",
+            "AQUINAS_SET2_2023_04__NEW_DECK",
+            "AQUINAS_SET2_2023_04__OLD_DECK",
+        ],
+    }
+    with open_preprocess_store(preprocess_dir) as store:
+        retained = store.iter_retained_events()
+    assert set(retained["set_name"]) == {"AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"}
+
+
+def test_write_dataframe_atomic_removes_temp_file_and_leaves_no_final_file_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame({"value": [1, 2]})
+    output_path = tmp_path / "aligned.csv.gz"
+    original_to_csv = pd.DataFrame.to_csv
+
+    def fail_after_temp_write(self, path_or_buf=None, *args, **kwargs):  # noqa: ANN001
+        if isinstance(path_or_buf, Path):
+            path_or_buf.write_text("partial", encoding="utf-8")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", fail_after_temp_write)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        pipeline_mod._write_dataframe_atomic(output_path, frame)
+
+    assert not output_path.exists()
+    assert not (tmp_path / ".aligned.csv.gz.tmp").exists()
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", original_to_csv)
