@@ -1,4 +1,4 @@
-# EWSHM 2026 -- Structural Health Monitoring Challenge
+# EWSHM 2026 — Structural Health Monitoring Challenge
 
 ```text
  █████╗  ██████╗ ██╗   ██╗██╗███╗   ██╗ █████╗ ███████╗    ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗
@@ -325,9 +325,18 @@ results/
 
 What the viewer currently shows:
 
-- Analytical 3D bridge geometry for the `OLD` and `NEW` decks
-- Sensor layout derived directly from AQUINAS sensor names
-- A top-level `All | ACC | STR` toggle
+- Analytical 3D bridge geometry for the `OLD` and `NEW` decks rendered
+  as a correct trapezoidal box-girder cross-section (wider at top,
+  narrower at bottom), matching the AQUINAS handbook structural drawings
+- `OLD deck` / `NEW deck` identity labels painted as canvas textures
+  directly on the top slab surface of each deck
+- Sensor glyphs placed on **exterior** structural surfaces so they are
+  always visible and clickable:
+  - `SUP_STR` — top of top slab (pushed upward)
+  - `INF_STR` — bottom of bottom slab (pushed downward)
+  - `ACC_Z / ACC_Y` — outer edge of bottom slab (pushed outward)
+  - `SHE_STR` — outer face of web at mid-height
+- A top-level `ALL | ACC | STR` family toggle
 - Proxy metrics from AQUINAS index tables:
   event count, mean range, mean absolute mean value, mean duration,
   and mean temperature
@@ -335,13 +344,15 @@ What the viewer currently shows:
 - Homologous sensor comparisons and capped correlation overlays
 - Deck-scoped event previews keyed by `dataset + deck + Start_Time + End_Time`
 
-Current limitation:
+Current limitation / WIP:
 
 - Until the scoring stages are implemented, the viewer uses metadata-derived
-  proxy metrics rather than final structural health scores.
+  proxy metrics rather than final structural health scores. A **WIP** badge
+  is shown in the viewer topbar as a reminder.
 - `aquinas viz open` serves the bundle over local HTTP and keeps the
   process running until you stop it with `Ctrl+C`. This avoids browser
   `file://` CORS restrictions when loading JSON artifacts.
+- See `aquinas_toolkit/visualization/README.md` for full UI documentation.
 
 ## Timeline
 

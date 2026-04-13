@@ -1,26 +1,28 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const SCALE = 3; // normalized coord → world unit multiplier
-const SIDE_Z = { UP: 0.24 * SCALE, DO: -0.24 * SCALE };
-
 const COLOR = {
-  deckOld: 0xd9d0c0,
-  deckNew: 0xbfcfc8,
-  deckEdge: 0x2a2420,
-  pier: 0x9a9088,
-  accRed: 0xc53030,
-  strBlue: 0x2b6cb0,
-  highAmber: 0xd97706,
-  selected: 0xf5a623,
+  deckOldSlab: 0xd6ccb9,
+  deckOldWeb: 0xc4baa7,
+  deckNewSlab: 0xc9d6d7,
+  deckNewWeb: 0xafc2c4,
+  deckEdge: 0x28384d,
+  pier: 0x7a756f,
+  gridMinor: 0xcbd5e1,
+  gridMajor: 0x94a3b8,
+  accRed: 0xb0323d,
+  strBlue: 0x275d9b,
+  highAmber: 0xd17a17,
+  selected: 0x102c53,
+  groundText: 0x7b8da7,
 };
 
-const CAM_DEFAULT = { x: 3 * SCALE, y: 2.8 * SCALE, z: 10 * SCALE };
-const CAM_TARGET  = { x: 1.0 * SCALE, y: 0, z: 0 };
-
-// ─── State ────────────────────────────────────────────────────────────────────
+const CAM_DEFAULT = { x: 20, y: 14, z: -25 };
+const CAM_TARGET = { x: 45, y: 1.5, z: 0 };
+const GROUND_Y = -18;
+const GRID_SIZE = 150;
+const GRID_MINOR_STEP = 5;
+const GRID_MAJOR_STEP = 15;
 
 const state = {
   manifest: null,
@@ -44,6 +46,7 @@ const state = {
   selectedSensorId: null,
   isolatedSensorId: null,
   selectedPreviewEventId: null,
+  activeTab: "scene",
   filters: {
     deck: new Set(),
     span: new Set(),
@@ -53,38 +56,35 @@ const state = {
   },
 };
 
-// ─── Three.js context ─────────────────────────────────────────────────────────
-
 let renderer, scene, camera, controls, raycaster, pointer;
-const deckGroups = {}; // deck → THREE.Group (positioned at deck Z center)
-const sensorObjs = new Map(); // sensorId → { group: THREE.Group, meshes: THREE.Mesh[] }
-const pickTargets = []; // flat array of meshes tested by raycaster
+const deckGroups = {};
+const pierGroups = {};
+const sensorObjs = new Map();
+const pickTargets = [];
 let hoveredId = null;
-let tweenId = null;
-
-// ─── DOM refs ─────────────────────────────────────────────────────────────────
 
 const el = {
   datasetSelect: document.getElementById("dataset-select"),
-  metricSelect:  document.getElementById("metric-select"),
-  familyToggle:  document.getElementById("family-toggle"),
-  viewToggle:    document.getElementById("view-toggle"),
-  compareMode:   document.getElementById("compare-mode"),
-  corrToggle:    document.getElementById("correlation-toggle"),
-  filterGroups:  document.getElementById("filter-groups"),
-  resetFilters:  document.getElementById("reset-filters"),
-  resetCamera:   document.getElementById("reset-camera"),
-  stageTitle:    document.getElementById("stage-title"),
-  stageSub:      document.getElementById("stage-subtitle"),
-  statusStrip:   document.getElementById("status-strip"),
-  sceneWrap:     document.getElementById("scene-wrap"),
-  canvas:        document.getElementById("bridge-canvas"),
-  tooltip:       document.getElementById("tooltip"),
-  inspector:     document.getElementById("inspector"),
-  datasetStrip:  document.getElementById("dataset-strip"),
+  metricSelect: document.getElementById("metric-select"),
+  familyToggle: document.getElementById("family-toggle"),
+  compareMode: document.getElementById("compare-mode"),
+  corrToggle: document.getElementById("correlation-toggle"),
+  filterGroups: document.getElementById("filter-groups"),
+  resetFilters: document.getElementById("reset-filters"),
+  resetCamera: document.getElementById("reset-camera"),
+  stageTitle: document.getElementById("stage-title"),
+  stageSub: document.getElementById("stage-subtitle"),
+  analysisSub: document.getElementById("analysis-subtitle"),
+  statusStrip: document.getElementById("status-strip"),
+  sceneWrap: document.getElementById("scene-wrap"),
+  canvas: document.getElementById("bridge-canvas"),
+  tooltip: document.getElementById("tooltip"),
+  inspector: document.getElementById("inspector"),
+  datasetStrip: document.getElementById("dataset-strip"),
+  sceneSelection: document.getElementById("scene-selection"),
+  tabButtons: Array.from(document.querySelectorAll("[data-tab]")),
+  tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
 };
-
-// ─── Boot ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
   initialize().catch((err) => {
@@ -110,11 +110,11 @@ async function initialize() {
       fetchJson(files.correlations),
     ]);
 
-  state.geometry     = geometry;
+  state.geometry = geometry;
   state.sensorLayout = sensorLayout;
-  state.metrics      = metrics;
-  state.trends       = trends;
-  state.eventGroups  = eventGroups;
+  state.metrics = metrics;
+  state.trends = trends;
+  state.eventGroups = eventGroups;
   state.correlations = correlations;
   state.selectedDataset = state.manifest.default_dataset;
 
@@ -126,71 +126,76 @@ async function initialize() {
   render();
 }
 
-// ─── Lookups ──────────────────────────────────────────────────────────────────
+function meters(value) {
+  return value * state.geometry.world.meters_per_normalized_unit;
+}
+
+function pointFromRecord(point) {
+  return new THREE.Vector3(meters(point.x), meters(point.y), meters(point.z));
+}
+
+function vectorFromRecord(vector) {
+  return new THREE.Vector3(vector.x, vector.y, vector.z).normalize();
+}
 
 function buildLookups() {
   state.metricLookup = new Map(
-    state.metrics.map((r) => [metricKey(r.dataset, r.metric_id, r.sensor_id), r])
+    state.metrics.map((row) => [metricKey(row.dataset, row.metric_id, row.sensor_id), row])
   );
-  state.trendLookup = new Map(
-    state.trends.map((r) => [`${r.sensor_id}|${r.metric_id}`, r])
-  );
+  state.trendLookup = new Map(state.trends.map((row) => [`${row.sensor_id}|${row.metric_id}`, row]));
+
   state.correlationLookup = new Map();
-  for (const r of state.correlations) {
-    const k = `${r.sensor_id}|${r.metric_id}`;
-    const cur = state.correlationLookup.get(k) || [];
-    cur.push(r);
-    state.correlationLookup.set(k, cur);
+  for (const row of state.correlations) {
+    const key = `${row.sensor_id}|${row.metric_id}`;
+    const current = state.correlationLookup.get(key) || [];
+    current.push(row);
+    state.correlationLookup.set(key, current);
   }
+
   state.eventLookup = new Map();
-  for (const r of state.eventGroups) {
-    const k = `${r.dataset}|${r.deck}`;
-    const cur = state.eventLookup.get(k) || [];
-    cur.push(r);
-    state.eventLookup.set(k, cur);
+  for (const row of state.eventGroups) {
+    const key = `${row.dataset}|${row.deck}`;
+    const current = state.eventLookup.get(key) || [];
+    current.push(row);
+    state.eventLookup.set(key, current);
   }
 }
 
-// ─── Controls ─────────────────────────────────────────────────────────────────
-
 function buildControls() {
   el.datasetSelect.innerHTML = state.manifest.available_datasets
-    .map((d) => `<option value="${d.dataset}">${d.label} · ${d.dataset}</option>`)
+    .map((dataset) => `<option value="${dataset.dataset}">${dataset.label} · ${dataset.dataset}</option>`)
     .join("");
   el.datasetSelect.value = state.selectedDataset;
 
   el.metricSelect.innerHTML = state.manifest.metric_catalog
-    .map((m) => `<option value="${m.metric_id}">${m.label}</option>`)
+    .map((metric) => `<option value="${metric.metric_id}">${metric.label}</option>`)
     .join("");
   el.metricSelect.value = state.selectedMetric;
 
-  renderSegmented(el.familyToggle, ["ALL", "ACC", "STR"], state.family, (v) => {
-    state.family = v;
+  renderSegmented(el.familyToggle, ["ALL", "ACC", "STR"], state.family, (value) => {
+    state.family = value;
     reconcileSelection();
-    render();
-  });
-  renderSegmented(el.viewToggle, ["exploded", "compact"], state.viewMode, (v) => {
-    state.viewMode = v;
-    tweenDeckPositions();
     render();
   });
 
   buildFilterControls();
   buildDatasetStrip();
+  setActiveTab(state.activeTab);
 }
 
 function buildFilterControls() {
   const activeFamily = state.family;
   const axisValues = uniqueValues(
     state.sensorLayout
-      .filter((s) => activeFamily === "ALL" || s.measurement_family === activeFamily)
-      .map((s) => s.axis_or_fibre)
+      .filter((sensor) => activeFamily === "ALL" || sensor.measurement_family === activeFamily)
+      .map((sensor) => sensor.axis_or_fibre)
   );
+
   const groups = [
-    ["deck",          uniqueValues(state.sensorLayout.map((s) => s.deck))],
-    ["span",          uniqueValues(state.sensorLayout.map((s) => s.span))],
-    ["side",          uniqueValues(state.sensorLayout.map((s) => s.side))],
-    ["section",       uniqueValues(state.sensorLayout.map((s) => s.section))],
+    ["deck", uniqueValues(state.sensorLayout.map((sensor) => sensor.deck))],
+    ["span", uniqueValues(state.sensorLayout.map((sensor) => sensor.span))],
+    ["side", uniqueValues(state.sensorLayout.map((sensor) => sensor.side))],
+    ["section", uniqueValues(state.sensorLayout.map((sensor) => sensor.section))],
     ["axis_or_fibre", axisValues],
   ];
 
@@ -198,14 +203,16 @@ function buildFilterControls() {
     .map(([name, values]) => {
       const selected = state.filters[name];
       const options = values
-        .map((v) => {
-          const checked = selected.size === 0 || selected.has(v) ? "checked" : "";
+        .map((value) => {
+          const checked = selected.size === 0 || selected.has(value) ? "checked" : "";
+          const title = name === "axis_or_fibre" ? "Axis / fibre" : capitalize(name);
           return `<label>
-            <input type="checkbox" data-filter-group="${name}" value="${v}" ${checked} />
-            <span>${v}</span>
+            <input type="checkbox" data-filter-group="${name}" value="${value}" ${checked} />
+            <span>${value}</span>
           </label>`;
         })
         .join("");
+
       const title = name === "axis_or_fibre" ? "Axis / fibre" : capitalize(name);
       return `<div class="filter-group">
         <h3>${title}</h3>
@@ -218,156 +225,226 @@ function buildFilterControls() {
 function buildDatasetStrip() {
   el.datasetStrip.innerHTML = state.manifest.available_datasets
     .map(
-      (d) => `<button class="dataset-button ${d.dataset === state.selectedDataset ? "active" : ""}"
-               data-dataset-button="${d.dataset}" type="button">
-        <strong>${d.label}</strong>
-        <span>${d.dataset}</span>
+      (dataset) => `<button
+        class="dataset-button ${dataset.dataset === state.selectedDataset ? "active" : ""}"
+        data-dataset-button="${dataset.dataset}"
+        type="button"
+      >
+        <strong>${dataset.label}</strong>
+        <span>${dataset.dataset}</span>
       </button>`
     )
     .join("");
 }
 
 function bindStaticEvents() {
-  el.datasetSelect.addEventListener("change", (e) => {
-    state.selectedDataset = e.target.value;
+  el.datasetSelect.addEventListener("change", (event) => {
+    state.selectedDataset = event.target.value;
     render();
   });
-  el.metricSelect.addEventListener("change", (e) => {
-    state.selectedMetric = e.target.value;
+
+  el.metricSelect.addEventListener("change", (event) => {
+    state.selectedMetric = event.target.value;
     render();
   });
-  el.compareMode.addEventListener("change", (e) => {
-    state.compareMode = e.target.value;
+
+  el.compareMode.addEventListener("change", (event) => {
+    state.compareMode = event.target.value;
     render();
   });
-  el.corrToggle.addEventListener("change", (e) => {
-    state.showCorrelations = e.target.checked;
+
+  el.corrToggle.addEventListener("change", (event) => {
+    state.showCorrelations = event.target.checked;
     render();
   });
+
   el.resetFilters.addEventListener("click", () => {
-    for (const k of Object.keys(state.filters)) state.filters[k] = new Set();
+    for (const key of Object.keys(state.filters)) {
+      state.filters[key] = new Set();
+    }
     state.isolatedSensorId = null;
     buildFilterControls();
     render();
   });
+
   el.resetCamera.addEventListener("click", resetCamera);
-  el.filterGroups.addEventListener("change", (e) => {
-    const t = e.target;
-    if (!(t instanceof HTMLInputElement) || !t.dataset.filterGroup) return;
-    const grp = t.dataset.filterGroup;
+
+  el.filterGroups.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !target.dataset.filterGroup) return;
+    const group = target.dataset.filterGroup;
     const checked = new Set(
-      Array.from(el.filterGroups.querySelectorAll(`input[data-filter-group="${grp}"]:checked`))
-        .map((i) => i.value)
+      Array.from(el.filterGroups.querySelectorAll(`input[data-filter-group="${group}"]:checked`))
+        .map((input) => input.value)
     );
     const all = new Set(
-      Array.from(el.filterGroups.querySelectorAll(`input[data-filter-group="${grp}"]`))
-        .map((i) => i.value)
+      Array.from(el.filterGroups.querySelectorAll(`input[data-filter-group="${group}"]`))
+        .map((input) => input.value)
     );
-    state.filters[grp] = checked.size === all.size ? new Set() : checked;
+    state.filters[group] = checked.size === all.size ? new Set() : checked;
     reconcileSelection();
     render();
   });
-  el.datasetStrip.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-dataset-button]");
-    if (!t) return;
-    state.selectedDataset = t.dataset.datasetButton;
+
+  el.datasetStrip.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-dataset-button]");
+    if (!target) return;
+    state.selectedDataset = target.dataset.datasetButton;
     el.datasetSelect.value = state.selectedDataset;
     render();
   });
+
+  el.sceneSelection.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-open-analysis]");
+    if (target) setActiveTab("analysis");
+  });
+
+  for (const button of el.tabButtons) {
+    button.addEventListener("click", () => setActiveTab(button.dataset.tab));
+  }
 }
 
-// ─── Render orchestrator ──────────────────────────────────────────────────────
+function setActiveTab(tabId) {
+  state.activeTab = tabId;
+  for (const button of el.tabButtons) {
+    button.classList.toggle("active", button.dataset.tab === tabId);
+  }
+  for (const panel of el.tabPanels) {
+    panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
+  }
+  if (tabId === "scene") {
+    requestAnimationFrame(onResize);
+  }
+}
 
 function render() {
   buildFilterControls();
   buildDatasetStrip();
   updateHeader();
+  updateSceneSelection();
   updateSensorGlyphs();
   renderInspector();
 }
 
 function updateHeader() {
   const dataset = state.manifest.available_datasets.find(
-    (d) => d.dataset === state.selectedDataset
+    (item) => item.dataset === state.selectedDataset
   );
   const visible = getVisibleSensors();
+
   el.stageTitle.textContent = `${dataset ? dataset.label : state.selectedDataset} · ${labelForMetric(state.selectedMetric)}`;
-  el.stageSub.textContent = "3D analytical schematic — drag to orbit, scroll to zoom.";
+  el.stageSub.textContent = "Metric-scaled analytical view with mount-aware sensor placement.";
+  el.analysisSub.textContent = state.selectedSensorId
+    ? `Detailed view for ${state.selectedSensorId}.`
+    : "Select a marker in the 3D view to inspect the sensor in detail.";
+
   el.statusStrip.innerHTML = [
     `${visible.length} sensors`,
     `${state.family} family`,
-    capitalize(state.viewMode),
+    state.selectedSensorId ? "Selection active" : "No selection",
   ]
-    .map((t) => `<span class="status-pill">${t}</span>`)
+    .map((text) => `<span class="status-pill">${text}</span>`)
     .join("");
 }
 
-// ─── Three.js scene setup ─────────────────────────────────────────────────────
+function updateSceneSelection() {
+  const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
+  if (!sensor) {
+    el.sceneSelection.innerHTML = `
+      <div class="card">
+        <h3>No sensor selected</h3>
+        <p class="card-note">
+          Click any marker in the scene to pin a sensor, then open the analysis tab for trends,
+          homologous comparison, and waveform context.
+        </p>
+      </div>`;
+    return;
+  }
+
+  const metric = getMetric(sensor.sensor_id);
+  const local = sensor.local_position;
+
+  el.sceneSelection.innerHTML = `
+    <div class="card">
+      <h3>${sensor.sensor_id}</h3>
+      <div class="metric-value">${formatMetric(metric)}</div>
+      <p class="card-note">${labelForMetric(state.selectedMetric)} · ${metric?.unit ?? "n/a"}</p>
+    </div>
+    <div class="card">
+      <h3>Mounted at</h3>
+      <div class="meta-grid">
+        ${metaRow("Deck", sensor.deck)}
+        ${metaRow("Span", sensor.span)}
+        ${metaRow("Side", sensor.side)}
+        ${metaRow("Surface", humanizeSurface(sensor.mount_surface))}
+        ${metaRow("Local X", `${formatNumeric(meters(local.x))} m`)}
+        ${metaRow("Local Y", `${formatNumeric(meters(local.y))} m`)}
+      </div>
+    </div>
+    <button class="ghost-button" type="button" data-open-analysis>Open analysis</button>`;
+}
 
 function initThree() {
-  renderer = new THREE.WebGLRenderer({ canvas: el.canvas, antialias: true });
+  renderer = new THREE.WebGLRenderer({ canvas: el.canvas, antialias: true, alpha: false });
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setClearColor(0xf7f5f0, 1);
+  renderer.setClearColor(0xf7f8fb, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0xf7f5f0, 0.018);
+  scene.fog = new THREE.Fog(0xf7f8fb, 65, 180);
 
-  camera = new THREE.PerspectiveCamera(42, 1, 0.05, 300);
+  camera = new THREE.PerspectiveCamera(38, 1, 0.1, 350);
   camera.position.set(CAM_DEFAULT.x, CAM_DEFAULT.y, CAM_DEFAULT.z);
 
   controls = new OrbitControls(camera, el.canvas);
   controls.target.set(CAM_TARGET.x, CAM_TARGET.y, CAM_TARGET.z);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.07;
-  controls.minPolarAngle = 0.05;
+  controls.dampingFactor = 0.06;
+  controls.minPolarAngle = 0.15;
   controls.maxPolarAngle = Math.PI * 0.48;
-  controls.minDistance = 2;
-  controls.maxDistance = 60;
+  controls.minDistance = 18;
+  controls.maxDistance = 150;
   controls.update();
 
-  // Lighting
-  const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.78);
   scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight(0xfff4e0, 1.1);
-  sun.position.set(8, 18, 12);
+  const sun = new THREE.DirectionalLight(0xfff7eb, 1.1);
+  sun.position.set(42, 72, 34);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far = 80;
-  sun.shadow.camera.left = -20;
-  sun.shadow.camera.right = 20;
-  sun.shadow.camera.top = 10;
-  sun.shadow.camera.bottom = -10;
-  sun.shadow.bias = -0.001;
+  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 180;
+  sun.shadow.camera.left = -45;
+  sun.shadow.camera.right = 55;
+  sun.shadow.camera.top = 55;
+  sun.shadow.camera.bottom = -55;
+  sun.shadow.bias = -0.0004;
   scene.add(sun);
 
-  const fill = new THREE.DirectionalLight(0xd0e8ff, 0.35);
-  fill.position.set(-6, 5, -10);
+  const fill = new THREE.DirectionalLight(0xdbeafe, 0.45);
+  fill.position.set(-36, 26, -52);
   scene.add(fill);
 
-  // Ground plane (subtle shadow receiver)
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(80, 80),
-    new THREE.ShadowMaterial({ opacity: 0.06 })
+    new THREE.PlaneGeometry(220, 160),
+    new THREE.ShadowMaterial({ opacity: 0.09 })
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -1.2 * SCALE;
+  ground.position.set(45, GROUND_Y, 0);
   ground.receiveShadow = true;
   scene.add(ground);
 
   raycaster = new THREE.Raycaster();
-  raycaster.params.Line = { threshold: 0.1 };
   pointer = new THREE.Vector2();
 
   el.canvas.addEventListener("pointermove", onPointerMove);
   el.canvas.addEventListener("click", onCanvasClick);
   el.canvas.addEventListener("dblclick", onCanvasDoubleClick);
 
-  const ro = new ResizeObserver(onResize);
-  ro.observe(el.sceneWrap);
+  const observer = new ResizeObserver(onResize);
+  observer.observe(el.sceneWrap);
   onResize();
 
   animate();
@@ -380,10 +457,10 @@ function animate() {
 }
 
 function onResize() {
-  const w = el.sceneWrap.clientWidth;
-  const h = el.sceneWrap.clientHeight || 480;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  const width = el.sceneWrap.clientWidth;
+  const height = el.sceneWrap.clientHeight || 480;
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
 
@@ -393,284 +470,457 @@ function resetCamera() {
   controls.update();
 }
 
-// ─── Bridge geometry ──────────────────────────────────────────────────────────
-
 function buildBridgeScene() {
+  addGroundContext();
   buildDecks();
   buildPiers();
+  addDirectionLabels();
+}
+
+function addGroundContext() {
+  const minorDivisions = GRID_SIZE / GRID_MINOR_STEP;
+  const majorDivisions = GRID_SIZE / GRID_MAJOR_STEP;
+
+  const minorGrid = new THREE.GridHelper(GRID_SIZE, minorDivisions, COLOR.gridMinor, COLOR.gridMinor);
+  minorGrid.position.set(45, GROUND_Y + 0.01, 0);
+  setHelperOpacity(minorGrid, 0.18);
+  scene.add(minorGrid);
+
+  const majorGrid = new THREE.GridHelper(GRID_SIZE, majorDivisions, COLOR.gridMajor, COLOR.gridMajor);
+  majorGrid.position.set(45, GROUND_Y + 0.02, 0);
+  setHelperOpacity(majorGrid, 0.28);
+  scene.add(majorGrid);
+
+  const tickGroup = new THREE.Group();
+  const tickMaterial = new THREE.LineBasicMaterial({ color: COLOR.gridMajor, transparent: true, opacity: 0.45 });
+  for (let value = 0; value <= 90; value += GRID_MAJOR_STEP) {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(value, GROUND_Y + 0.02, 18),
+      new THREE.Vector3(value, GROUND_Y + 0.02, 20),
+    ]);
+    tickGroup.add(new THREE.Line(geometry, tickMaterial));
+    tickGroup.add(createGroundText(`${value} m`, {
+      width: 5.6,
+      height: 1.3,
+      fontSize: 44,
+      color: "#74849a",
+      opacity: 0.78,
+      position: new THREE.Vector3(value, GROUND_Y + 0.04, 22),
+    }));
+  }
+
+  tickGroup.add(createGroundText("Span 1", {
+    width: 7.5,
+    height: 1.6,
+    fontSize: 52,
+    color: "#8da0b8",
+    opacity: 0.52,
+    position: new THREE.Vector3(22.5, GROUND_Y + 0.04, 15.5),
+  }));
+  tickGroup.add(createGroundText("Span 2", {
+    width: 7.5,
+    height: 1.6,
+    fontSize: 52,
+    color: "#8da0b8",
+    opacity: 0.52,
+    position: new THREE.Vector3(67.5, GROUND_Y + 0.04, 15.5),
+  }));
+  scene.add(tickGroup);
 }
 
 function buildDecks() {
   const viewModes = state.geometry.view_modes;
+  const cross = state.geometry.cross_section;
+
+  const depth = meters(cross.depth);
+  const topWidth = meters(cross.top_slab_width);
+  const bottomWidth = meters(cross.bottom_slab_width);
+  const slabThickness = meters(cross.slab_thickness);
+  const webTopOuterHalf = meters(cross.web_top_outer_width / 2);
+  const webBottomOuterHalf = meters(cross.web_bottom_outer_width / 2);
+  const webTopInnerHalf = meters((cross.web_top_outer_width - (2 * cross.web_thickness)) / 2);
+  const webBottomInnerHalf = meters(cross.inner_bottom_width / 2);
+  const halfDepth = depth / 2;
+  const topSlabCenterY = halfDepth - (slabThickness / 2);
+  const bottomSlabCenterY = -halfDepth + (slabThickness / 2);
+  const webTopY = halfDepth - slabThickness;
+  const webBottomY = -halfDepth + slabThickness;
 
   for (const deckData of state.geometry.deck_meshes) {
     const group = new THREE.Group();
     deckGroups[deckData.deck] = group;
     scene.add(group);
 
-    const deckColor = deckData.deck === "OLD" ? COLOR.deckOld : COLOR.deckNew;
-    const zCenter = viewModes[state.viewMode].deck_centers[deckData.deck];
-    group.position.z = zCenter * SCALE;
+    const deckCenterZ = meters(viewModes[state.viewMode].deck_centers[deckData.deck]);
+    group.position.z = deckCenterZ;
 
-    for (const seg of deckData.segments) {
-      const len   = (seg.x_end - seg.x_start) * SCALE;
-      const cx    = ((seg.x_start + seg.x_end) / 2) * SCALE;
-      const w     = seg.width * SCALE;   // transverse (local Z within group)
-      const d     = seg.depth * SCALE;   // vertical (Y)
+    const slabColor = deckData.deck === "OLD" ? COLOR.deckOldSlab : COLOR.deckNewSlab;
+    const webColor = deckData.deck === "OLD" ? COLOR.deckOldWeb : COLOR.deckNewWeb;
 
-      // Main girder — hollow box-girder cross-section via CSG-like approach:
-      // outer box + two inner cutout boxes (flanges) using MeshStandardMaterial
-      const outerGeo = new THREE.BoxGeometry(len, d, w);
-      const mat = new THREE.MeshStandardMaterial({
-        color: deckColor,
-        roughness: 0.78,
-        metalness: 0.0,
+    for (const segment of deckData.segments) {
+      const startX = meters(segment.x_start);
+      const length = meters(segment.x_end - segment.x_start);
+      const centerX = startX + (length / 2);
+
+      const slabMaterial = new THREE.MeshStandardMaterial({
+        color: slabColor,
+        roughness: 0.86,
+        metalness: 0.02,
+        transparent: true,
+        opacity: 0.78,
       });
-      const mesh = new THREE.Mesh(outerGeo, mat);
-      mesh.position.set(cx, 0, 0);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
+      const webMaterial = new THREE.MeshStandardMaterial({
+        color: webColor,
+        roughness: 0.9,
+        metalness: 0.02,
+        transparent: true,
+        opacity: 0.74,
+        side: THREE.DoubleSide,
+      });
 
-      // Sharp edge overlay
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(outerGeo, 20),
-        new THREE.LineBasicMaterial({ color: COLOR.deckEdge, linewidth: 1 })
+      const topSlab = new THREE.Mesh(
+        new THREE.BoxGeometry(length, slabThickness, topWidth),
+        slabMaterial
       );
-      edges.position.set(cx, 0, 0);
-      group.add(edges);
+      topSlab.position.set(centerX, topSlabCenterY, 0);
+      topSlab.castShadow = true;
+      topSlab.receiveShadow = true;
+      group.add(topSlab);
+      addEdgeOverlay(topSlab.geometry, topSlab.position, topSlab.rotation, group);
 
-      // Top flange highlight strip
-      const flangeGeo = new THREE.BoxGeometry(len, d * 0.09, w);
-      const flangeMat = new THREE.MeshStandardMaterial({
-        color: deckData.deck === "OLD" ? 0xe8dece : 0xd0dedc,
-        roughness: 0.6,
-      });
-      const flange = new THREE.Mesh(flangeGeo, flangeMat);
-      flange.position.set(cx, d * 0.455, 0);
-      flange.receiveShadow = true;
-      group.add(flange);
+      const bottomSlab = new THREE.Mesh(
+        new THREE.BoxGeometry(length, slabThickness, bottomWidth),
+        webMaterial
+      );
+      bottomSlab.position.set(centerX, bottomSlabCenterY, 0);
+      bottomSlab.castShadow = true;
+      bottomSlab.receiveShadow = true;
+      group.add(bottomSlab);
+      addEdgeOverlay(bottomSlab.geometry, bottomSlab.position, bottomSlab.rotation, group);
+
+      const webProfiles = [
+        [
+          [-webBottomOuterHalf, webTopY],
+          [-webBottomInnerHalf, webTopY],
+          [-webTopInnerHalf, webBottomY],
+          [-webTopOuterHalf, webBottomY],
+        ],
+        [
+          [webBottomInnerHalf, webTopY],
+          [webBottomOuterHalf, webTopY],
+          [webTopOuterHalf, webBottomY],
+          [webTopInnerHalf, webBottomY],
+        ],
+      ];
+
+      for (const profile of webProfiles) {
+        const shape = new THREE.Shape();
+        shape.moveTo(profile[0][0], profile[0][1]);
+        for (const [z, y] of profile.slice(1)) {
+          shape.lineTo(z, y);
+        }
+        shape.closePath();
+
+        const geometry = new THREE.ExtrudeGeometry(shape, { depth: length, bevelEnabled: false });
+        const web = new THREE.Mesh(geometry, webMaterial);
+        web.rotation.y = Math.PI / 2;
+        web.position.set(startX, 0, 0);
+        web.castShadow = true;
+        web.receiveShadow = true;
+        group.add(web);
+        addEdgeOverlay(geometry, web.position, web.rotation, group);
+      }
     }
 
-    // Deck label sprite
-    addDeckLabel(group, deckData.deck, viewModes[state.viewMode].deck_centers[deckData.deck]);
+    addDeckLabel(group, deckData.deck);
   }
 }
 
-function addDeckLabel(group, deckName, _zCenter) {
-  // Floating text via canvas sprite
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "rgba(0,0,0,0)";
-  ctx.fillRect(0, 0, 256, 64);
-  ctx.font = "bold 32px 'Barlow Condensed', sans-serif";
-  ctx.fillStyle = deckName === "OLD" ? "#8b7355" : "#4a7a6e";
-  ctx.textAlign = "left";
-  ctx.fillText(`${deckName} DECK`, 12, 44);
+function addDeckLabel(group, deckName) {
+  const halfDepth = meters(state.geometry.cross_section.depth) / 2;
+  const color = deckName === "OLD" ? "#7f6f59" : "#4d7b79";
 
-  const texture = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(2.5, 0.65, 1);
-  sprite.position.set(0.2 * SCALE, 0.6 * SCALE, 0);
-  group.add(sprite);
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 80;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, 512, 80);
+  ctx.font = "900 52px Manrope, sans-serif";
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${deckName} deck`, 256, 40);
+
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(52, 7),
+    new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  plane.rotation.x = -Math.PI / 2;
+  plane.position.set(45, halfDepth + 0.06, 0);
+  group.add(plane);
 }
 
 function buildPiers() {
-  for (const pier of state.geometry.pier_anchors) {
-    const wx = pier.x * SCALE;
-    // Horizontal cross-beam spanning both decks
-    const beamH = 0.12 * SCALE;
-    const beamW = 0.08 * SCALE;
-    const beamSpan = 4.5 * SCALE; // spans z from OLD to NEW
-    const beamGeo = new THREE.BoxGeometry(beamW, beamH, beamSpan);
-    const beamMat = new THREE.MeshStandardMaterial({ color: COLOR.pier, roughness: 0.85 });
-    const beam = new THREE.Mesh(beamGeo, beamMat);
-    beam.position.set(wx, -0.28 * SCALE, 0);
-    beam.castShadow = true;
-    scene.add(beam);
-
-    // Vertical support column (stub)
-    const colGeo = new THREE.CylinderGeometry(0.06 * SCALE, 0.09 * SCALE, 0.45 * SCALE, 6);
-    const col = new THREE.Mesh(colGeo, beamMat);
-    col.position.set(wx, -0.58 * SCALE, 0);
-    col.castShadow = true;
-    scene.add(col);
-
-    // Triangular footing (inverted pyramid)
-    const footGeo = new THREE.ConeGeometry(0.18 * SCALE, 0.24 * SCALE, 3);
-    const foot = new THREE.Mesh(footGeo, beamMat);
-    foot.rotation.x = Math.PI;
-    foot.position.set(wx, -0.95 * SCALE, 0);
-    foot.castShadow = true;
-    scene.add(foot);
-  }
-}
-
-// ─── View mode tween ──────────────────────────────────────────────────────────
-
-function tweenDeckPositions() {
+  const cross = state.geometry.cross_section;
+  const halfDepth = meters(cross.depth) / 2;
+  const padHeight = 0.7;
+  const columnHeight = 14.0;
+  const footingHeight = 1.0;
   const viewModes = state.geometry.view_modes;
-  const targets = {};
-  for (const deck of ["OLD", "NEW"]) {
-    targets[deck] = viewModes[state.viewMode].deck_centers[deck] * SCALE;
-  }
 
-  if (tweenId) cancelAnimationFrame(tweenId);
+  for (const deckData of state.geometry.deck_meshes) {
+    const group = new THREE.Group();
+    group.position.z = meters(viewModes[state.viewMode].deck_centers[deckData.deck]);
+    pierGroups[deckData.deck] = group;
+    scene.add(group);
 
-  const duration = 420;
-  const start = performance.now();
-  const fromZ = { OLD: deckGroups.OLD?.position.z ?? targets.OLD, NEW: deckGroups.NEW?.position.z ?? targets.NEW };
+    for (const pier of state.geometry.pier_anchors) {
+      const x = meters(pier.x);
+      const material = new THREE.MeshStandardMaterial({ color: COLOR.pier, roughness: 0.92 });
 
-  function step(now) {
-    const t = Math.min((now - start) / duration, 1);
-    const ease = 1 - Math.pow(1 - t, 3); // cubic ease-out
-    for (const deck of ["OLD", "NEW"]) {
-      if (deckGroups[deck]) {
-        deckGroups[deck].position.z = fromZ[deck] + (targets[deck] - fromZ[deck]) * ease;
-      }
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(4.8, padHeight, 2.8), material);
+      pad.position.set(x, -(halfDepth + (padHeight / 2)), 0);
+      pad.castShadow = true;
+      group.add(pad);
+
+      const column = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.95, 1.35, columnHeight, 10),
+        material
+      );
+      column.position.set(x, -(halfDepth + padHeight + (columnHeight / 2)), 0);
+      column.castShadow = true;
+      group.add(column);
+
+      const footing = new THREE.Mesh(new THREE.BoxGeometry(5.4, footingHeight, 5.4), material);
+      footing.position.set(
+        x,
+        -(halfDepth + padHeight + columnHeight + (footingHeight / 2)),
+        0
+      );
+      footing.castShadow = true;
+      group.add(footing);
     }
-    // Tween sensor glyph absolute Z positions in sync with their deck group
-    for (const [sensorId, obj] of sensorObjs) {
-      const sensor = state.sensorLayout.find((s) => s.sensor_id === sensorId);
-      if (!sensor) continue;
-      obj.group.position.z =
-        fromZ[sensor.deck] + (targets[sensor.deck] - fromZ[sensor.deck]) * ease + SIDE_Z[sensor.side];
-    }
-    if (t < 1) tweenId = requestAnimationFrame(step);
   }
-
-  tweenId = requestAnimationFrame(step);
 }
 
-// ─── Sensor glyphs ────────────────────────────────────────────────────────────
+function addDirectionLabels() {
+  const labels = [
+    { text: "UPSTREAM", color: "#7b8da7", z: 20 },
+    { text: "DOWNSTREAM", color: "#8aa8bb", z: -20 },
+  ];
+
+  for (const label of labels) {
+    scene.add(createGroundText(label.text, {
+      width: 18,
+      height: 3.2,
+      fontSize: 68,
+      color: label.color,
+      opacity: 0.74,
+      position: new THREE.Vector3(70, GROUND_Y + 0.05, label.z),
+    }));
+  }
+}
+
+function addEdgeOverlay(geometry, position, rotation, parent) {
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry, 18),
+    new THREE.LineBasicMaterial({
+      color: COLOR.deckEdge,
+      transparent: true,
+      opacity: 0.32,
+    })
+  );
+  edges.position.copy(position);
+  edges.rotation.copy(rotation);
+  parent.add(edges);
+}
+
+function createTextCanvas(text, { width = 512, height = 128, fontSize = 48, color = "#102c53", opacity = 1 }) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, width, height);
+  context.globalAlpha = opacity;
+  context.font = `800 ${fontSize}px Manrope`;
+  context.fillStyle = color;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, width / 2, height / 2);
+  return canvas;
+}
+
+function setHelperOpacity(helper, opacity) {
+  const materials = Array.isArray(helper.material) ? helper.material : [helper.material];
+  for (const material of materials) {
+    material.transparent = true;
+    material.opacity = opacity;
+  }
+}
+
+function createBillboardLabel(text, { width, height, fontSize, color }) {
+  const texture = new THREE.CanvasTexture(createTextCanvas(text, { fontSize, color }));
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(width, height, 1);
+  return sprite;
+}
+
+function createGroundText(text, { width, height, fontSize, color, opacity, position }) {
+  const texture = new THREE.CanvasTexture(createTextCanvas(text, { fontSize, color, opacity }));
+  texture.needsUpdate = true;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.copy(position);
+  return mesh;
+}
+
 
 function updateSensorGlyphs() {
-  const visible = new Set(getVisibleSensors().map((s) => s.sensor_id));
-  const selected = state.selectedSensorId;
+  const visible = new Set(getVisibleSensors().map((sensor) => sensor.sensor_id));
 
-  // Remove glyphs for sensors that are no longer visible
-  for (const [id, obj] of sensorObjs) {
-    if (!visible.has(id)) {
-      scene.remove(obj.group);
-      sensorObjs.delete(id);
-      const idx = pickTargets.indexOf(obj.pickMesh);
-      if (idx !== -1) pickTargets.splice(idx, 1);
+  for (const [sensorId, object] of sensorObjs) {
+    if (!visible.has(sensorId)) {
+      scene.remove(object.group);
+      sensorObjs.delete(sensorId);
+      const index = pickTargets.indexOf(object.pickMesh);
+      if (index !== -1) pickTargets.splice(index, 1);
     }
   }
 
-  // Add or update glyphs
   for (const sensor of getVisibleSensors()) {
     const metric = getMetric(sensor.sensor_id);
-    const isSelected = sensor.sensor_id === selected;
+    const isSelected = sensor.sensor_id === state.selectedSensorId;
     const isHigh = metric?.status_band === "high";
-    const isLow  = metric?.status_band === "low";
+    const isLow = metric?.status_band === "low";
 
     if (sensorObjs.has(sensor.sensor_id)) {
-      // Update color/scale
-      const obj = sensorObjs.get(sensor.sensor_id);
-      const col = glyphColor(sensor, isHigh, isSelected);
-      for (const m of obj.meshes) {
-        m.material.color.setHex(col);
-        m.material.emissive?.setHex(isSelected ? 0x331100 : 0x000000);
-        m.material.opacity = isLow ? 0.38 : 1.0;
+      const object = sensorObjs.get(sensor.sensor_id);
+      const color = glyphColor(sensor, isHigh, isSelected);
+      for (const mesh of object.meshes) {
+        mesh.material.color.setHex(color);
+        mesh.material.emissive?.setHex(isSelected ? 0x143763 : 0x000000);
+        mesh.material.opacity = isLow ? 0.34 : 1.0;
       }
-      obj.group.scale.setScalar(isSelected ? 1.45 : (sensor.sensor_id === hoveredId ? 1.3 : 1.0));
+      object.group.scale.setScalar(isSelected ? 1.18 : sensor.sensor_id === hoveredId ? 1.08 : 1.0);
     } else {
-      // Create new glyph — use the deck group's CURRENT z (may be mid-tween)
-      // so the sensor appears at the right place immediately rather than snapping
-      const currentDeckZ = deckGroups[sensor.deck]?.position.z
-        ?? state.geometry.view_modes[state.viewMode].deck_centers[sensor.deck] * SCALE;
       const group = buildGlyph(sensor, metric, isSelected);
-      group.position.set(
-        sensor.x * SCALE,
-        sensor.y * SCALE,
-        currentDeckZ + SIDE_Z[sensor.side]
-      );
+      const local = sensor.local_position;
+      const deckCenter = deckGroups[sensor.deck]?.position.z
+        ?? meters(state.geometry.view_modes[state.viewMode].deck_centers[sensor.deck]);
+      group.position.set(meters(local.x), meters(local.y), deckCenter + meters(local.z));
       scene.add(group);
 
-      // Invisible pick sphere for raycasting
-      const pickGeo = new THREE.SphereGeometry(0.18 * SCALE, 6, 6);
-      const pickMat = new THREE.MeshBasicMaterial({ visible: false });
-      const pickMesh = new THREE.Mesh(pickGeo, pickMat);
+      const pickBounds = glyphPickBounds(group);
+      const pickMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(pickBounds.radius, 10, 10),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
       pickMesh.userData.sensorId = sensor.sensor_id;
+      pickMesh.position.copy(pickBounds.center);
       group.add(pickMesh);
       pickTargets.push(pickMesh);
 
-      sensorObjs.set(sensor.sensor_id, { group, meshes: group.userData.coloredMeshes, pickMesh });
+      sensorObjs.set(sensor.sensor_id, {
+        group,
+        meshes: group.userData.coloredMeshes,
+        pickMesh,
+      });
     }
   }
 }
 
-
 function glyphColor(sensor, isHigh, isSelected) {
   if (isSelected) return COLOR.selected;
-  if (isHigh)     return COLOR.highAmber;
+  if (isHigh) return COLOR.highAmber;
   return sensor.measurement_family === "ACC" ? COLOR.accRed : COLOR.strBlue;
 }
 
 function buildGlyph(sensor, metric, isSelected) {
   const group = new THREE.Group();
-  const isHigh = metric?.status_band === "high";
-  const col = glyphColor(sensor, isHigh, isSelected);
   const meshes = [];
+  const isHigh = metric?.status_band === "high";
 
-  const mat = () =>
-    new THREE.MeshStandardMaterial({
-      color: col,
-      roughness: 0.4,
-      metalness: 0.1,
-      emissive: isSelected ? new THREE.Color(0x331100) : new THREE.Color(0x000000),
-      transparent: true,
-      opacity: metric?.status_band === "low" ? 0.38 : 1.0,
-    });
+  const material = () => new THREE.MeshStandardMaterial({
+    color: glyphColor(sensor, isHigh, isSelected),
+    roughness: 0.32,
+    metalness: 0.12,
+    emissive: isSelected ? new THREE.Color(0x143763) : new THREE.Color(0x000000),
+    transparent: true,
+    opacity: metric?.status_band === "low" ? 0.34 : 1.0,
+  });
 
-  const sz = 0.13 * SCALE; // base glyph size
+  const size = 0.55;
 
-  if (sensor.glyph_type === "vertical-arrow") {
-    // Upward arrow: shaft + cone
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(sz * 0.22, sz * 0.22, sz * 1.6, 8), mat());
-    shaft.position.y = sz * 0.5;
-    const head = new THREE.Mesh(new THREE.ConeGeometry(sz * 0.5, sz * 0.85, 8), mat());
-    head.position.y = sz * 1.6;
+  if (sensor.measurement_family === "ACC") {
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(size * 0.16, size * 0.16, size * 1.35, 10),
+      material()
+    );
+    shaft.position.y = size * 0.55;
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(size * 0.34, size * 0.55, 10),
+      material()
+    );
+    head.position.y = size * 1.42;
     meshes.push(shaft, head);
     group.add(shaft, head);
 
-  } else if (sensor.glyph_type === "transverse-arrow") {
-    // Sideways arrow in Z direction
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(sz * 0.22, sz * 0.22, sz * 1.6, 8), mat());
-    shaft.rotation.x = Math.PI / 2;
-    shaft.position.z = sz * 0.5;
-    const head = new THREE.Mesh(new THREE.ConeGeometry(sz * 0.5, sz * 0.85, 8), mat());
-    head.rotation.x = Math.PI / 2;
-    head.position.z = sz * 1.55;
-    meshes.push(shaft, head);
-    group.add(shaft, head);
-
+    const targetAxis = vectorFromRecord(sensor.glyph_orientation);
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), targetAxis);
   } else {
-    // Strain gauge — double-headed bone shape (two cones pointing out from center)
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(sz * 0.18, sz * 0.18, sz * 1.4, 8), mat());
-    body.rotation.z = Math.PI / 2; // horizontal
-    const headL = new THREE.Mesh(new THREE.ConeGeometry(sz * 0.48, sz * 0.7, 8), mat());
-    headL.rotation.z = Math.PI / 2;
-    headL.position.x = -sz * 1.1;
-    const headR = new THREE.Mesh(new THREE.ConeGeometry(sz * 0.48, sz * 0.7, 8), mat());
-    headR.rotation.z = -Math.PI / 2;
-    headR.position.x = sz * 1.1;
-    meshes.push(body, headL, headR);
-    group.add(body, headL, headR);
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(size * 0.12, size * 0.12, size * 1.2, 10),
+      material()
+    );
+    body.rotation.z = Math.PI / 2;
+    const headLeft = new THREE.Mesh(
+      new THREE.ConeGeometry(size * 0.28, size * 0.42, 10),
+      material()
+    );
+    headLeft.rotation.z = Math.PI / 2;
+    headLeft.position.x = -size * 0.88;
+    const headRight = new THREE.Mesh(
+      new THREE.ConeGeometry(size * 0.28, size * 0.42, 10),
+      material()
+    );
+    headRight.rotation.z = -Math.PI / 2;
+    headRight.position.x = size * 0.88;
+    meshes.push(body, headLeft, headRight);
+    group.add(body, headLeft, headRight);
+
+    const targetAxis = vectorFromRecord(sensor.glyph_orientation);
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), targetAxis);
   }
 
   group.userData.coloredMeshes = meshes;
-  for (const m of meshes) {
-    m.castShadow = true;
+  for (const mesh of meshes) {
+    mesh.castShadow = true;
   }
   return group;
 }
 
-// ─── Raycasting ───────────────────────────────────────────────────────────────
+function glyphPickBounds(group) {
+  const box = new THREE.Box3().setFromObject(group);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  return {
+    center: sphere.center,
+    radius: Math.max(sphere.radius, 0.55),
+  };
+}
 
 function getCanvasPointer(event) {
   const rect = el.canvas.getBoundingClientRect();
@@ -681,8 +931,8 @@ function getCanvasPointer(event) {
 }
 
 function raycastSensor(event) {
-  const p = getCanvasPointer(event);
-  pointer.set(p.x, p.y);
+  const point = getCanvasPointer(event);
+  pointer.set(point.x, point.y);
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(pickTargets, false);
   return hits.length ? hits[0].object.userData.sensorId : null;
@@ -691,32 +941,31 @@ function raycastSensor(event) {
 function onPointerMove(event) {
   const sensorId = raycastSensor(event);
   if (sensorId !== hoveredId) {
-    // Update previous hovered
     if (hoveredId && sensorObjs.has(hoveredId)) {
-      const obj = sensorObjs.get(hoveredId);
-      const isSelected = hoveredId === state.selectedSensorId;
-      obj.group.scale.setScalar(isSelected ? 1.45 : 1.0);
+      const object = sensorObjs.get(hoveredId);
+      object.group.scale.setScalar(hoveredId === state.selectedSensorId ? 1.18 : 1.0);
     }
     hoveredId = sensorId;
-    // Update new hovered
     if (hoveredId && sensorObjs.has(hoveredId) && hoveredId !== state.selectedSensorId) {
-      sensorObjs.get(hoveredId).group.scale.setScalar(1.3);
+      sensorObjs.get(hoveredId).group.scale.setScalar(1.08);
     }
   }
 
-  if (sensorId) {
-    const sensor = state.sensorLayout.find((s) => s.sensor_id === sensorId);
-    const metric = getMetric(sensorId);
-    el.tooltip.innerHTML = `
-      <strong>${sensorId}</strong><br>
-      ${sensor.deck} · ${sensor.span}_${sensor.section} · ${sensor.side}<br>
-      ${labelForMetric(state.selectedMetric)}: ${formatMetric(metric)}`;
-    el.tooltip.classList.remove("hidden");
-    el.tooltip.style.left = `${event.offsetX}px`;
-    el.tooltip.style.top  = `${event.offsetY}px`;
-  } else {
+  if (!sensorId) {
     el.tooltip.classList.add("hidden");
+    return;
   }
+
+  const sensor = state.sensorLayout.find((item) => item.sensor_id === sensorId);
+  const metric = getMetric(sensorId);
+  el.tooltip.innerHTML = `
+    <strong>${sensorId}</strong><br>
+    ${sensor.deck} · ${sensor.span}_${sensor.section} · ${sensor.side}<br>
+    ${humanizeSurface(sensor.mount_surface)}<br>
+    ${labelForMetric(state.selectedMetric)}: ${formatMetric(metric)}`;
+  el.tooltip.classList.remove("hidden");
+  el.tooltip.style.left = `${event.offsetX}px`;
+  el.tooltip.style.top = `${event.offsetY}px`;
 }
 
 function onCanvasClick(event) {
@@ -735,29 +984,29 @@ function onCanvasDoubleClick(event) {
   render();
 }
 
-// ─── Inspector ────────────────────────────────────────────────────────────────
-
 function renderInspector() {
-  const sensor = state.sensorLayout.find((s) => s.sensor_id === state.selectedSensorId);
+  const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
   if (!sensor) {
     el.inspector.innerHTML = `
       <div class="card">
         <h3>No sensor selected</h3>
-        <p class="card-note">Click any marker in the 3D view to pin a sensor and inspect
-        its metric value, trend, homologous comparison, correlations, and waveform preview.</p>
+        <p class="card-note">
+          Use the 3D view to select a sensor. The analysis tab will show its metric value,
+          location, homologous comparison, trend, correlations, and waveform preview.
+        </p>
       </div>`;
     return;
   }
 
-  const metric          = getMetric(sensor.sensor_id);
-  const homologous      = sensor.homologous_sensor_id
-    ? state.sensorLayout.find((s) => s.sensor_id === sensor.homologous_sensor_id)
+  const metric = getMetric(sensor.sensor_id);
+  const homologous = sensor.homologous_sensor_id
+    ? state.sensorLayout.find((item) => item.sensor_id === sensor.homologous_sensor_id)
     : null;
   const homologousMetric = homologous ? getMetric(homologous.sensor_id) : null;
-  const relatedSensors   = getRelatedSensors(sensor);
-  const correlations     = (
+  const relatedSensors = getRelatedSensors(sensor);
+  const correlations = (
     state.correlationLookup.get(`${sensor.sensor_id}|${state.selectedMetric}`) || []
-  ).slice(0, 3);
+  ).slice(0, 4);
   const trend = state.trendLookup.get(`${sensor.sensor_id}|${state.selectedMetric}`);
   const waveformCard = renderWaveformCard(sensor);
 
@@ -775,8 +1024,18 @@ function renderInspector() {
         ${metaRow("Span", sensor.span)}
         ${metaRow("Side", sensor.side)}
         ${metaRow("Section", `${sensor.span}_${sensor.section}`)}
-        ${metaRow("Family", sensor.measurement_family)}
+        ${metaRow("Surface", humanizeSurface(sensor.mount_surface))}
         ${metaRow("Axis / fibre", sensor.axis_or_fibre)}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Mount geometry</h3>
+      <div class="meta-grid">
+        ${metaRow("Anchor X", `${formatNumeric(meters(sensor.anchor_local.x))} m`)}
+        ${metaRow("Anchor Y", `${formatNumeric(meters(sensor.anchor_local.y))} m`)}
+        ${metaRow("Anchor Z", `${formatNumeric(meters(sensor.anchor_local.z))} m`)}
+        ${metaRow("Offset", `${formatNumeric(meters(sensor.readability_offset))} m`)}
       </div>
     </div>
 
@@ -799,7 +1058,7 @@ function renderInspector() {
         trend
           ? `${renderSparkline(trend.points)}
              <p class="card-note">${trend.points
-               .map((p) => `${p.dataset_label}: ${formatNumeric(p.value)}`)
+               .map((point) => `${point.dataset_label}: ${formatNumeric(point.value)}`)
                .join(" · ")}</p>`
           : `<p class="empty-state">No trend points available for this metric.</p>`
       }
@@ -810,7 +1069,7 @@ function renderInspector() {
       ${
         relatedSensors.length
           ? `<ul class="mini-list">${relatedSensors
-              .map((e) => `<li>${e.sensor_id} · ${formatMetric(getMetric(e.sensor_id))}</li>`)
+              .map((entry) => `<li>${entry.sensor_id} · ${formatMetric(getMetric(entry.sensor_id))}</li>`)
               .join("")}</ul>`
           : `<p class="empty-state">No related sensors under active filters.</p>`
       }
@@ -822,12 +1081,12 @@ function renderInspector() {
         correlations.length
           ? `<ul class="mini-list">${correlations
               .map(
-                (r) => `<li>${r.target_sensor_id} · r=${formatNumeric(r.correlation)}${
-                  r.cross_deck_homologous ? " · homologous" : ""
+                (row) => `<li>${row.target_sensor_id} · r=${formatNumeric(row.correlation)}${
+                  row.cross_deck_homologous ? " · homologous" : ""
                 }</li>`
               )
               .join("")}</ul>`
-          : `<p class="empty-state">Correlations based on proxy metric trends.</p>`
+          : `<p class="empty-state">Correlations are derived from proxy metric trends.</p>`
       }
     </div>
 
@@ -836,11 +1095,15 @@ function renderInspector() {
 
   const previewSelect = el.inspector.querySelector("[data-waveform-select]");
   if (previewSelect) {
-    previewSelect.addEventListener("change", async (e) => {
-      const id = e.target.value;
-      if (!id) { state.selectedPreviewEventId = null; renderInspector(); return; }
-      state.selectedPreviewEventId = id;
-      await ensureWaveformLoaded(id);
+    previewSelect.addEventListener("change", async (event) => {
+      const selectedId = event.target.value;
+      if (!selectedId) {
+        state.selectedPreviewEventId = null;
+        renderInspector();
+        return;
+      }
+      state.selectedPreviewEventId = selectedId;
+      await ensureWaveformLoaded(selectedId);
       renderInspector();
     });
   }
@@ -848,7 +1111,8 @@ function renderInspector() {
 
 function renderWaveformCard(sensor) {
   const events = (state.eventLookup.get(`${state.selectedDataset}|${sensor.deck}`) || [])
-    .filter((ev) => ev.sensor_ids.includes(sensor.sensor_id));
+    .filter((event) => event.sensor_ids.includes(sensor.sensor_id));
+
   if (!events.length) {
     return `<div class="card">
       <h3>Deck-scoped event detail</h3>
@@ -856,12 +1120,13 @@ function renderWaveformCard(sensor) {
     </div>`;
   }
 
-  const selectable = events.filter((ev) => ev.waveform_preview_path);
+  const selectable = events.filter((event) => event.waveform_preview_path);
   const activeId =
-    selectable.find((ev) => ev.event_group_id === state.selectedPreviewEventId)?.event_group_id ||
-    selectable[0]?.event_group_id || "";
+    selectable.find((event) => event.event_group_id === state.selectedPreviewEventId)?.event_group_id
+    || selectable[0]?.event_group_id
+    || "";
   const waveformData = activeId ? state.waveformCache.get(activeId) : null;
-  const trace = waveformData?.traces?.find((t) => t.sensor_id === sensor.sensor_id);
+  const trace = waveformData?.traces?.find((item) => item.sensor_id === sensor.sensor_id);
 
   return `<div class="card">
     <h3>Deck-scoped event detail</h3>
@@ -871,8 +1136,8 @@ function renderWaveformCard(sensor) {
       <select id="waveform-select" data-waveform-select>
         ${selectable
           .map(
-            (ev) => `<option value="${ev.event_group_id}" ${ev.event_group_id === activeId ? "selected" : ""}>
-              ${ev.start_time_utc} · ${ev.sensor_count} sensors
+            (event) => `<option value="${event.event_group_id}" ${event.event_group_id === activeId ? "selected" : ""}>
+              ${event.start_time_utc} · ${event.sensor_count} sensors
             </option>`
           )
           .join("")}
@@ -880,7 +1145,7 @@ function renderWaveformCard(sensor) {
     </div>
     ${
       !selectable.length
-        ? `<p class="empty-state">Waveform previews not included in this bundle.</p>`
+        ? `<p class="empty-state">Waveform previews were not included in this bundle.</p>`
         : trace
         ? renderWaveform(trace)
         : `<p class="empty-state">Select an event to inspect this sensor's waveform.</p>`
@@ -890,54 +1155,54 @@ function renderWaveformCard(sensor) {
 
 async function ensureWaveformLoaded(eventGroupId) {
   if (state.waveformCache.has(eventGroupId)) return;
-  const ev = state.eventGroups.find((e) => e.event_group_id === eventGroupId);
-  if (!ev?.waveform_preview_path) return;
-  const payload = await fetchJson(ev.waveform_preview_path);
+  const event = state.eventGroups.find((item) => item.event_group_id === eventGroupId);
+  if (!event?.waveform_preview_path) return;
+  const payload = await fetchJson(event.waveform_preview_path);
   state.waveformCache.set(eventGroupId, payload);
 }
 
 async function ensureDefaultPreview() {
-  const sensor = state.sensorLayout.find((s) => s.sensor_id === state.selectedSensorId);
+  const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
   if (!sensor) return;
-  const ev = (state.eventLookup.get(`${state.selectedDataset}|${sensor.deck}`) || []).find(
-    (e) => e.waveform_preview_path && e.sensor_ids.includes(sensor.sensor_id)
+  const event = (state.eventLookup.get(`${state.selectedDataset}|${sensor.deck}`) || []).find(
+    (entry) => entry.waveform_preview_path && entry.sensor_ids.includes(sensor.sensor_id)
   );
-  if (!ev) return;
-  state.selectedPreviewEventId = ev.event_group_id;
-  await ensureWaveformLoaded(ev.event_group_id);
+  if (!event) return;
+  state.selectedPreviewEventId = event.event_group_id;
+  await ensureWaveformLoaded(event.event_group_id);
 }
 
-// ─── Sparkline / Waveform (SVG, unchanged from original) ─────────────────────
-
 function renderSparkline(points) {
-  const valid = points.filter((p) => p.value !== null && p.value !== undefined);
+  const valid = points.filter((point) => point.value !== null && point.value !== undefined);
   if (!valid.length) return "";
-  const W = 250, H = 100;
-  const min = Math.min(...valid.map((p) => p.value));
-  const max = Math.max(...valid.map((p) => p.value));
+
+  const width = 250;
+  const height = 100;
+  const min = Math.min(...valid.map((point) => point.value));
+  const max = Math.max(...valid.map((point) => point.value));
   const range = max - min || 1;
-  const path = valid
-    .map((p, i) => {
-      const x = 14 + (i * (W - 28)) / Math.max(valid.length - 1, 1);
-      const y = H - 14 - ((p.value - min) / range) * (H - 28);
-      return `${i === 0 ? "M" : "L"} ${x} ${y}`;
-    })
-    .join(" ");
-  const area = `M 14 ${H - 14} ` + valid
-    .map((p, i) => {
-      const x = 14 + (i * (W - 28)) / Math.max(valid.length - 1, 1);
-      const y = H - 14 - ((p.value - min) / range) * (H - 28);
+
+  const path = valid.map((point, index) => {
+    const x = 14 + (index * (width - 28)) / Math.max(valid.length - 1, 1);
+    const y = height - 14 - ((point.value - min) / range) * (height - 28);
+    return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+  }).join(" ");
+
+  const area = `M 14 ${height - 14} `
+    + valid.map((point, index) => {
+      const x = 14 + (index * (width - 28)) / Math.max(valid.length - 1, 1);
+      const y = height - 14 - ((point.value - min) / range) * (height - 28);
       return `L ${x} ${y}`;
-    })
-    .join(" ") + ` L ${14 + ((valid.length - 1) * (W - 28)) / Math.max(valid.length - 1, 1)} ${H - 14} Z`;
-  const dots = valid
-    .map((p, i) => {
-      const x = 14 + (i * (W - 28)) / Math.max(valid.length - 1, 1);
-      const y = H - 14 - ((p.value - min) / range) * (H - 28);
-      return `<circle cx="${x}" cy="${y}" r="3.5" fill="var(--accent)"/>`;
-    })
-    .join("");
-  return `<svg class="sparkline" viewBox="0 0 ${W} ${H}">
+    }).join(" ")
+    + ` L ${14 + ((valid.length - 1) * (width - 28)) / Math.max(valid.length - 1, 1)} ${height - 14} Z`;
+
+  const dots = valid.map((point, index) => {
+    const x = 14 + (index * (width - 28)) / Math.max(valid.length - 1, 1);
+    const y = height - 14 - ((point.value - min) / range) * (height - 28);
+    return `<circle cx="${x}" cy="${y}" r="3.5" fill="var(--accent)"/>`;
+  }).join("");
+
+  return `<svg class="sparkline" viewBox="0 0 ${width} ${height}">
     <path d="${area}" fill="var(--accent)" opacity="0.08"/>
     <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
     ${dots}
@@ -947,24 +1212,24 @@ function renderSparkline(points) {
 function renderWaveform(trace) {
   const values = trace.values || [];
   if (!values.length) return `<p class="empty-state">No waveform samples.</p>`;
-  const W = 250, H = 120;
+
+  const width = 250;
+  const height = 120;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
-  const path = values
-    .map((v, i) => {
-      const x = 12 + (i * (W - 24)) / Math.max(values.length - 1, 1);
-      const y = H - 14 - ((v - min) / range) * (H - 28);
-      return `${i === 0 ? "M" : "L"} ${x} ${y}`;
-    })
-    .join(" ");
-  return `<svg class="waveform" viewBox="0 0 ${W} ${H}">
-    <line x1="12" y1="${H / 2}" x2="${W - 12}" y2="${H / 2}" stroke="var(--border)" stroke-width="1"/>
+
+  const path = values.map((value, index) => {
+    const x = 12 + (index * (width - 24)) / Math.max(values.length - 1, 1);
+    const y = height - 14 - ((value - min) / range) * (height - 28);
+    return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+  }).join(" ");
+
+  return `<svg class="waveform" viewBox="0 0 ${width} ${height}">
+    <line x1="12" y1="${height / 2}" x2="${width - 12}" y2="${height / 2}" stroke="var(--border)" stroke-width="1"/>
     <path d="${path}" fill="none" stroke="var(--acc)" stroke-width="1.8"/>
   </svg>`;
 }
-
-// ─── Visibility / filtering (unchanged logic) ─────────────────────────────────
 
 function getVisibleSensors() {
   return state.sensorLayout.filter(isVisible);
@@ -972,54 +1237,59 @@ function getVisibleSensors() {
 
 function isVisible(sensor) {
   if (state.family !== "ALL" && sensor.measurement_family !== state.family) return false;
+
   if (state.isolatedSensorId) {
-    const iso = state.sensorLayout.find((s) => s.sensor_id === state.isolatedSensorId);
-    if (iso) {
-      const sameNeighbourhood =
-        sensor.deck === iso.deck &&
-        sensor.span === iso.span &&
-        sensor.section === iso.section;
+    const isolated = state.sensorLayout.find((item) => item.sensor_id === state.isolatedSensorId);
+    if (isolated) {
+      const sameNeighborhood =
+        sensor.deck === isolated.deck
+        && sensor.span === isolated.span
+        && sensor.section === isolated.section;
       const isPair =
-        sensor.sensor_id === iso.homologous_sensor_id ||
-        sensor.sensor_id === iso.sensor_id;
-      if (!sameNeighbourhood && !isPair) return false;
+        sensor.sensor_id === isolated.sensor_id
+        || sensor.sensor_id === isolated.homologous_sensor_id;
+      if (!sameNeighborhood && !isPair) return false;
     }
   }
+
   return (
-    passesFilter("deck",          sensor.deck) &&
-    passesFilter("span",          sensor.span) &&
-    passesFilter("side",          sensor.side) &&
-    passesFilter("section",       sensor.section) &&
-    passesFilter("axis_or_fibre", sensor.axis_or_fibre)
+    passesFilter("deck", sensor.deck)
+    && passesFilter("span", sensor.span)
+    && passesFilter("side", sensor.side)
+    && passesFilter("section", sensor.section)
+    && passesFilter("axis_or_fibre", sensor.axis_or_fibre)
   );
 }
 
 function passesFilter(group, value) {
-  const sel = state.filters[group];
-  return sel.size === 0 || sel.has(value);
+  const selected = state.filters[group];
+  return selected.size === 0 || selected.has(value);
 }
 
 function reconcileSelection() {
   if (!state.selectedSensorId) return;
-  const s = state.sensorLayout.find((e) => e.sensor_id === state.selectedSensorId);
-  if (!s || !isVisible(s)) state.selectedSensorId = null;
+  const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
+  if (!sensor || !isVisible(sensor)) state.selectedSensorId = null;
 }
 
 function getRelatedSensors(sensor) {
-  const fam = sensor.measurement_family;
+  const family = sensor.measurement_family;
   return state.sensorLayout
-    .filter((e) => {
-      if (e.sensor_id === sensor.sensor_id) return false;
-      if (state.family !== "ALL" && e.measurement_family !== state.family) return false;
-      if (fam !== e.measurement_family) return false;
-      if (fam === "ACC")
-        return e.deck === sensor.deck && e.span === sensor.span && e.section === sensor.section;
-      return e.deck === sensor.deck && e.span === sensor.span;
+    .filter((item) => {
+      if (item.sensor_id === sensor.sensor_id) return false;
+      if (state.family !== "ALL" && item.measurement_family !== state.family) return false;
+      if (item.measurement_family !== family) return false;
+      if (family === "ACC") {
+        return (
+          item.deck === sensor.deck
+          && item.span === sensor.span
+          && item.section === sensor.section
+        );
+      }
+      return item.deck === sensor.deck && item.span === sensor.span;
     })
     .slice(0, 4);
 }
-
-// ─── Utilities ────────────────────────────────────────────────────────────────
 
 function getMetric(sensorId) {
   return state.metricLookup.get(metricKey(state.selectedDataset, state.selectedMetric, sensorId));
@@ -1028,27 +1298,30 @@ function getMetric(sensorId) {
 function renderSegmented(container, values, active, onChange) {
   container.innerHTML = values
     .map(
-      (v) => `<button type="button" class="${v === active ? "active" : ""}" data-segment-value="${v}">${v}</button>`
+      (value) => `<button type="button" class="${value === active ? "active" : ""}" data-segment-value="${value}">${value}</button>`
     )
     .join("");
-  container.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-segment-value]");
-    if (t) onChange(t.dataset.segmentValue);
+
+  container.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-segment-value]");
+    if (target) onChange(target.dataset.segmentValue);
   });
 }
 
 function fetchJson(path) {
-  return fetch(path).then(async (r) => {
-    if (!r.ok) throw new Error(`Failed to load ${path}: ${r.status}`);
-    return r.json();
+  return fetch(path).then(async (response) => {
+    if (!response.ok) throw new Error(`Failed to load ${path}: ${response.status}`);
+    return response.json();
   });
 }
 
-function uniqueValues(values) { return [...new Set(values)].sort(); }
+function uniqueValues(values) {
+  return [...new Set(values)].sort();
+}
 
-function labelForMetric(id) {
-  const m = state.manifest.metric_catalog.find((e) => e.metric_id === id);
-  return m ? m.label : id;
+function labelForMetric(metricId) {
+  const metric = state.manifest.metric_catalog.find((item) => item.metric_id === metricId);
+  return metric ? metric.label : metricId;
 }
 
 function formatMetric(metric) {
@@ -1065,6 +1338,14 @@ function metaRow(label, value) {
   return `<div class="meta-row"><strong>${label}</strong><span>${value}</span></div>`;
 }
 
-function metricKey(dataset, metricId, sensorId) { return `${dataset}|${metricId}|${sensorId}`; }
+function metricKey(dataset, metricId, sensorId) {
+  return `${dataset}|${metricId}|${sensorId}`;
+}
 
-function capitalize(v) { return `${v.charAt(0).toUpperCase()}${v.slice(1)}`; }
+function capitalize(value) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function humanizeSurface(surface) {
+  return surface.replaceAll("_", " ");
+}

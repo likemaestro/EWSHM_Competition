@@ -19,7 +19,16 @@ Important limitation:
 
 from __future__ import annotations
 
+from math import sqrt
 from typing import Any
+
+SPAN_LENGTH_M = 45.0
+
+
+def _norm(meters: float) -> float:
+    """Convert a physical dimension in meters to normalized span units."""
+    return meters / SPAN_LENGTH_M
+
 
 # These coordinates describe a normalized analytical schematic, not a
 # surveyed bridge model. The viewer and exporter both rely on this same
@@ -30,6 +39,31 @@ from typing import Any
 #   section definitions directly.
 # - `S1_SHE` and `S2_SHE` are intentional approximations because the
 #   handbook only states that the shear sensors are located "near pier 1".
+# - The shared cross-section below is a refined analytical box-girder
+#   derived from the handbook-scale interpretation used by the viewer:
+#   45 m span, 2.0 m depth, 7.5 m top slab width, 4.7 m bottom slab
+#   width, 0.30 m slab thickness, and 0.35 m web thickness.
+GIRDER_DEPTH = _norm(2.0)
+TOP_SLAB_WIDTH = _norm(7.5)
+BOTTOM_SLAB_WIDTH = _norm(4.7)
+SLAB_THICKNESS = _norm(0.30)
+WEB_THICKNESS = _norm(0.35)
+WEB_TOP_OUTER_WIDTH = _norm(4.0)
+INNER_BOTTOM_WIDTH = _norm(4.0)
+TOP_INNER_WIDTH = WEB_TOP_OUTER_WIDTH - (2 * WEB_THICKNESS)
+OVERHANG_WIDTH = (TOP_SLAB_WIDTH - WEB_TOP_OUTER_WIDTH) / 2
+SENSOR_READABILITY_OFFSET = _norm(0.12)
+
+HALF_DEPTH = GIRDER_DEPTH / 2
+HALF_TOP_SLAB = TOP_SLAB_WIDTH / 2
+HALF_BOTTOM_SLAB = BOTTOM_SLAB_WIDTH / 2
+HALF_WEB_TOP_OUTER = WEB_TOP_OUTER_WIDTH / 2
+HALF_WEB_TOP_INNER = TOP_INNER_WIDTH / 2
+HALF_WEB_BOTTOM_OUTER = HALF_BOTTOM_SLAB
+HALF_WEB_BOTTOM_INNER = INNER_BOTTOM_WIDTH / 2
+TOP_SLAB_UNDERSIDE_Y = HALF_DEPTH - SLAB_THICKNESS
+BOTTOM_SLAB_TOP_Y = -HALF_DEPTH + SLAB_THICKNESS
+
 SECTION_X = {
     "S1_MID": 0.50,
     "S1_INT": 0.67,
@@ -43,24 +77,16 @@ SPAN_BOUNDARIES = {
     "S2": (1.0, 2.0),
 }
 DECK_Z_CENTERS = {
-    "compact": {"OLD": 1.10, "NEW": -1.10},
-    "exploded": {"OLD": 1.90, "NEW": -1.90},
-}
-SIDE_Z_OFFSET = {"UP": 0.24, "DO": -0.24}
-HEIGHT_BY_GLYPH = {
-    "vertical-arrow": 0.30,
-    "transverse-arrow": 0.18,
-    "lower-strain": -0.30,
-    "upper-strain": 0.30,
-    "shear-strain": 0.0,
+    "compact": {"OLD": 0.14, "NEW": -0.14},
+    "exploded": {"OLD": 0.22, "NEW": -0.22},
 }
 X_NUDGE = {
-    "MID_ACC_Z": -0.02,
-    "MID_ACC_Y": 0.03,
-    "INT_ACC_Z": -0.02,
-    "INT_ACC_Y": 0.03,
-    "INF_STR": -0.04,
-    "SUP_STR": 0.04,
+    "MID_ACC_Z": -0.008,
+    "MID_ACC_Y": 0.008,
+    "INT_ACC_Z": -0.008,
+    "INT_ACC_Y": 0.008,
+    "INF_STR": -0.012,
+    "SUP_STR": 0.012,
     "SHE_STR": 0.0,
 }
 GLYPH_BY_MEASUREMENT = {
@@ -72,6 +98,49 @@ GLYPH_BY_MEASUREMENT = {
     "SUP_STR": "upper-strain",
     "SHE_STR": "shear-strain",
 }
+
+
+def _normalize_vector(x: float, y: float, z: float) -> tuple[float, float, float]:
+    magnitude = sqrt((x * x) + (y * y) + (z * z))
+    if magnitude == 0:
+        raise ValueError("Cannot normalize a zero-length vector.")
+    return (x / magnitude, y / magnitude, z / magnitude)
+
+
+def _vector_dict(vector: tuple[float, float, float]) -> dict[str, float]:
+    return {
+        "x": round(vector[0], 4),
+        "y": round(vector[1], 4),
+        "z": round(vector[2], 4),
+    }
+
+
+def _point_dict(point: tuple[float, float, float]) -> dict[str, float]:
+    return {
+        "x": round(point[0], 4),
+        "y": round(point[1], 4),
+        "z": round(point[2], 4),
+    }
+
+
+def _side_sign(side: str) -> int:
+    return 1 if side == "UP" else -1
+
+
+def _web_outer_half_width_at(y: float) -> float:
+    """Return the half-width of the outer web face at a given local Y.
+
+    After the geometry fix the web is wider at the top (HALF_BOTTOM_SLAB)
+    and narrower at the bottom (HALF_WEB_TOP_OUTER), matching the correct
+    box-girder profile shown in the structural drawings.
+    """
+    top_y = TOP_SLAB_UNDERSIDE_Y
+    bottom_y = BOTTOM_SLAB_TOP_Y
+    span = bottom_y - top_y
+    if span == 0:
+        return HALF_BOTTOM_SLAB
+    t = (y - top_y) / span
+    return HALF_BOTTOM_SLAB + ((HALF_WEB_TOP_OUTER - HALF_BOTTOM_SLAB) * t)
 
 
 def parse_sensor_name(sensor_name: str) -> dict[str, Any]:
@@ -129,6 +198,81 @@ def parse_sensor_name(sensor_name: str) -> dict[str, Any]:
     }
 
 
+def _sensor_mount(parsed: dict[str, Any], *, x: float) -> dict[str, Any]:
+    """Return mount-aware local coordinates and orientation for one sensor."""
+    side_sign = _side_sign(parsed["side"])
+    measurement_code = parsed["measurement_code"]
+
+    if measurement_code == "SUP_STR":
+        # Placed on the exterior top surface of the top slab so it is
+        # visible and raycaster-reachable from above.
+        anchor = (
+            x,
+            HALF_DEPTH,
+            side_sign * (HALF_WEB_TOP_INNER - _norm(0.15)),
+        )
+        normal = (0.0, 1.0, 0.0)
+        orientation = (1.0, 0.0, 0.0)
+        surface = "top_slab_exterior"
+    elif measurement_code == "INF_STR":
+        # Placed on the exterior bottom surface of the bottom slab so it
+        # protrudes below the deck and can be clicked.
+        anchor = (
+            x,
+            -HALF_DEPTH,
+            side_sign * (HALF_WEB_BOTTOM_INNER - _norm(0.12)),
+        )
+        normal = (0.0, -1.0, 0.0)
+        orientation = (1.0, 0.0, 0.0)
+        surface = "bottom_slab_exterior"
+    elif measurement_code.endswith("ACC_Z"):
+        # Placed on the outer face of the bottom slab edge so the glyph
+        # sits outside the deck geometry and is clickable.
+        anchor = (
+            x,
+            BOTTOM_SLAB_TOP_Y,
+            side_sign * HALF_BOTTOM_SLAB,
+        )
+        normal = (0.0, 0.0, float(side_sign))
+        orientation = (0.0, 1.0, 0.0)
+        surface = "web_outer_face"
+    elif measurement_code.endswith("ACC_Y"):
+        anchor = (
+            x,
+            BOTTOM_SLAB_TOP_Y,
+            side_sign * HALF_BOTTOM_SLAB,
+        )
+        normal = (0.0, 0.0, float(side_sign))
+        orientation = (0.0, 0.0, -side_sign)
+        surface = "web_outer_face"
+    elif measurement_code == "SHE_STR":
+        anchor_y = 0.0
+        anchor = (
+            x,
+            anchor_y,
+            side_sign * _web_outer_half_width_at(anchor_y),
+        )
+        normal = _normalize_vector(0.0, 0.25, float(side_sign))
+        orientation = _normalize_vector(1.0 if parsed["span"] == "S1" else -1.0, 1.0, 0.0)
+        surface = "web_outer_face"
+    else:  # pragma: no cover - guarded by parse_sensor_name / glyph map
+        raise ValueError(f"Unsupported measurement code: {measurement_code}")
+
+    final_position = (
+        anchor[0] + (normal[0] * SENSOR_READABILITY_OFFSET),
+        anchor[1] + (normal[1] * SENSOR_READABILITY_OFFSET),
+        anchor[2] + (normal[2] * SENSOR_READABILITY_OFFSET),
+    )
+
+    return {
+        "anchor": anchor,
+        "normal": normal,
+        "orientation": orientation,
+        "final_position": final_position,
+        "mount_surface": surface,
+    }
+
+
 def build_sensor_layout(sensor_names: list[str]) -> list[dict[str, Any]]:
     """Build normalized analytical 3D coordinates for the AQUINAS sensors."""
     known_sensors = set(sensor_names)
@@ -138,22 +282,26 @@ def build_sensor_layout(sensor_names: list[str]) -> list[dict[str, Any]]:
         parsed = parse_sensor_name(sensor_name)
         measurement_code = parsed["measurement_code"]
 
-        # The viewer supports both compact and exploded deck spacing, so
-        # both positions are exported up front instead of recomputed later.
-        compact_z = DECK_Z_CENTERS["compact"][parsed["deck"]] + SIDE_Z_OFFSET[parsed["side"]]
-        exploded_z = DECK_Z_CENTERS["exploded"][parsed["deck"]] + SIDE_Z_OFFSET[parsed["side"]]
-
-        # Small x-offsets keep co-located markers legible without changing
-        # their structural section assignment from the handbook topology.
         x = SECTION_X[parsed["section_key"]] + X_NUDGE[measurement_code]
-        y = HEIGHT_BY_GLYPH[parsed["glyph_type"]]
+        mount = _sensor_mount(parsed, x=x)
+        local_position = mount["final_position"]
+
+        compact_z = DECK_Z_CENTERS["compact"][parsed["deck"]] + local_position[2]
+        exploded_z = DECK_Z_CENTERS["exploded"][parsed["deck"]] + local_position[2]
 
         layout_rows.append(
             {
                 **parsed,
-                "x": round(x, 4),
-                "y": round(y, 4),
+                "x": round(local_position[0], 4),
+                "y": round(local_position[1], 4),
                 "z": round(exploded_z, 4),
+                "local_position": _point_dict(local_position),
+                "anchor_local": _point_dict(mount["anchor"]),
+                "surface_normal": _vector_dict(mount["normal"]),
+                "glyph_orientation": _vector_dict(mount["orientation"]),
+                "mount_surface": mount["mount_surface"],
+                "readability_offset": round(SENSOR_READABILITY_OFFSET, 4),
+                "local_z": round(local_position[2], 4),
                 "compact_z": round(compact_z, 4),
                 "exploded_z": round(exploded_z, 4),
                 "homologous_sensor_id": (
@@ -173,19 +321,12 @@ def build_bridge_geometry() -> dict[str, Any]:
     for deck in ("OLD", "NEW"):
         segments = []
         for span, (x_start, x_end) in SPAN_BOUNDARIES.items():
-            # Each segment is a simple box-girder volume. The viewer turns
-            # this into an SVG projection rather than a true mesh render.
-            # Span extents are normalized for comparison; they are not meant
-            # to represent exact bridge dimensions in meters.
             segments.append(
                 {
                     "deck": deck,
                     "span": span,
                     "x_start": x_start,
                     "x_end": x_end,
-                    "y_center": 0.0,
-                    "depth": 0.48,
-                    "width": 0.58,
                     "compact_center_z": DECK_Z_CENTERS["compact"][deck],
                     "exploded_center_z": DECK_Z_CENTERS["exploded"][deck],
                 }
@@ -193,14 +334,26 @@ def build_bridge_geometry() -> dict[str, Any]:
         deck_meshes.append({"deck": deck, "segments": segments})
 
     label_anchors = [
-        {"label": "OLD deck", "x": 0.10, "y": -0.55, "compact_z": 1.10, "exploded_z": 1.90},
-        {"label": "NEW deck", "x": 0.10, "y": -0.55, "compact_z": -1.10, "exploded_z": -1.90},
-        {"label": "Span 1", "x": 0.50, "y": 0.65, "compact_z": 0.0, "exploded_z": 0.0},
-        {"label": "Span 2", "x": 1.50, "y": 0.65, "compact_z": 0.0, "exploded_z": 0.0},
+        {
+            "label": "OLD deck",
+            "x": 0.12,
+            "y": _norm(2.8),
+            "compact_z": DECK_Z_CENTERS["compact"]["OLD"],
+            "exploded_z": DECK_Z_CENTERS["exploded"]["OLD"],
+        },
+        {
+            "label": "NEW deck",
+            "x": 0.12,
+            "y": _norm(2.8),
+            "compact_z": DECK_Z_CENTERS["compact"]["NEW"],
+            "exploded_z": DECK_Z_CENTERS["exploded"]["NEW"],
+        },
+        {"label": "Span 1", "x": 0.50, "y": _norm(3.4), "compact_z": 0.0, "exploded_z": 0.0},
+        {"label": "Span 2", "x": 1.50, "y": _norm(3.4), "compact_z": 0.0, "exploded_z": 0.0},
     ]
 
     section_anchors = [
-        {"section_key": key, "x": x, "label": key.replace("_", " "), "y": 0.52}
+        {"section_key": key, "x": x, "label": key.replace("_", " "), "y": _norm(2.6)}
         for key, x in SECTION_X.items()
     ]
 
@@ -209,6 +362,22 @@ def build_bridge_geometry() -> dict[str, Any]:
             "x": "span progression",
             "y": "vertical elevation",
             "z": "upstream/downstream transverse axis",
+        },
+        "world": {
+            "meters_per_normalized_unit": SPAN_LENGTH_M,
+            "bridge_length_m": SPAN_LENGTH_M * 2,
+        },
+        "cross_section": {
+            "depth": GIRDER_DEPTH,
+            "top_slab_width": TOP_SLAB_WIDTH,
+            "bottom_slab_width": BOTTOM_SLAB_WIDTH,
+            "slab_thickness": SLAB_THICKNESS,
+            "web_thickness": WEB_THICKNESS,
+            "web_top_outer_width": WEB_TOP_OUTER_WIDTH,
+            "web_bottom_outer_width": BOTTOM_SLAB_WIDTH,
+            "inner_bottom_width": INNER_BOTTOM_WIDTH,
+            "top_inner_width": TOP_INNER_WIDTH,
+            "overhang_width": OVERHANG_WIDTH,
         },
         "view_modes": {
             "compact": {"deck_centers": DECK_Z_CENTERS["compact"]},

@@ -8,7 +8,11 @@ import pytest
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.cli import viz as viz_mod
 from aquinas_toolkit.utils.run_management import create_run
-from aquinas_toolkit.visualization import build_sensor_layout, build_visualization_artifacts
+from aquinas_toolkit.visualization import (
+    build_bridge_geometry,
+    build_sensor_layout,
+    build_visualization_artifacts,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -142,6 +146,62 @@ def test_build_sensor_layout_rejects_upstream_acc_y() -> None:
         build_sensor_layout(["OLD_S1_UP_INT_ACC_Y"])
 
 
+def test_build_sensor_layout_exports_mount_metadata() -> None:
+    layout = build_sensor_layout(
+        [
+            "OLD_S1_UP_SUP_STR",
+            "OLD_S1_DO_INF_STR",
+            "OLD_S1_DO_INT_ACC_Y",
+            "NEW_S2_UP_SHE_STR",
+        ]
+    )
+
+    old_sup = next(row for row in layout if row["sensor_id"] == "OLD_S1_UP_SUP_STR")
+    old_inf = next(row for row in layout if row["sensor_id"] == "OLD_S1_DO_INF_STR")
+    old_acc_y = next(row for row in layout if row["sensor_id"] == "OLD_S1_DO_INT_ACC_Y")
+    new_she = next(row for row in layout if row["sensor_id"] == "NEW_S2_UP_SHE_STR")
+
+    assert old_sup["mount_surface"] == "top_slab_exterior"
+    assert old_sup["surface_normal"] == {"x": 0.0, "y": 1.0, "z": 0.0}
+    assert old_sup["glyph_orientation"] == {"x": 1.0, "y": 0.0, "z": 0.0}
+    assert old_sup["local_position"]["y"] > old_sup["anchor_local"]["y"]
+    assert old_sup["compact_z"] == pytest.approx(0.1733, abs=1e-4)
+
+    assert old_inf["mount_surface"] == "bottom_slab_exterior"
+    assert old_inf["surface_normal"] == {"x": 0.0, "y": -1.0, "z": 0.0}
+    assert old_inf["local_position"]["y"] < old_inf["anchor_local"]["y"]
+    assert old_inf["compact_z"] == pytest.approx(0.0982, abs=1e-4)
+
+    assert old_acc_y["mount_surface"] == "web_outer_face"
+    assert old_acc_y["glyph_orientation"] == {"x": 0.0, "y": 0.0, "z": 1.0}
+    assert old_acc_y["surface_normal"] == {"x": 0.0, "y": 0.0, "z": -1.0}
+    assert old_acc_y["compact_z"] == pytest.approx(0.0851, abs=1e-3)
+
+    assert new_she["mount_surface"] == "web_outer_face"
+    assert new_she["glyph_orientation"]["x"] < 0
+    assert new_she["glyph_orientation"]["y"] > 0
+    assert new_she["surface_normal"]["z"] > 0
+
+
+def test_build_bridge_geometry_exports_shared_cross_section() -> None:
+    geometry = build_bridge_geometry()
+    cross_section = geometry["cross_section"]
+    first_segment = geometry["deck_meshes"][0]["segments"][0]
+
+    assert geometry["world"]["meters_per_normalized_unit"] == 45.0
+    assert geometry["world"]["bridge_length_m"] == 90.0
+    assert cross_section["depth"] == pytest.approx(2.0 / 45.0)
+    assert cross_section["top_slab_width"] == pytest.approx(7.5 / 45.0)
+    assert cross_section["bottom_slab_width"] == pytest.approx(4.7 / 45.0)
+    assert cross_section["slab_thickness"] == pytest.approx(0.30 / 45.0)
+    assert cross_section["web_thickness"] == pytest.approx(0.35 / 45.0)
+    assert cross_section["overhang_width"] == pytest.approx(1.75 / 45.0)
+    assert geometry["view_modes"]["compact"]["deck_centers"] == {"OLD": 0.14, "NEW": -0.14}
+    assert geometry["view_modes"]["exploded"]["deck_centers"] == {"OLD": 0.22, "NEW": -0.22}
+    assert first_segment["x_start"] == 0.0
+    assert first_segment["x_end"] == 1.0
+
+
 def test_build_visualization_artifacts_exports_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -156,16 +216,32 @@ def test_build_visualization_artifacts_exports_bundle(
     assert result.manifest_path.is_file()
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "2026-04-13"
     assert manifest["default_dataset"] == "AQUINAS_SET3_2023_08"
     assert manifest["supported_measurement_families"] == ["ALL", "ACC", "STR"]
+
+    index_html = (result.output_dir / "index.html").read_text(encoding="utf-8")
+    viewer_css = (result.output_dir / "viewer.css").read_text(encoding="utf-8")
+    assert "3D View" in index_html
+    assert "Sensor Analysis" in index_html
+    assert "Datasets" in index_html
+    assert "Manrope" in viewer_css
 
     sensor_layout = json.loads((result.output_dir / "sensor_layout.json").read_text(encoding="utf-8"))
     old_inf = next(row for row in sensor_layout if row["sensor_id"] == "OLD_S1_DO_INF_STR")
     old_acc_y = next(row for row in sensor_layout if row["sensor_id"] == "OLD_S1_DO_INT_ACC_Y")
     assert old_inf["homologous_sensor_id"] == "NEW_S1_DO_INF_STR"
     assert old_inf["section"] == "MID"
+    assert old_inf["mount_surface"] == "bottom_slab_exterior"
+    assert old_inf["local_position"]["y"] < 0
     assert old_acc_y["axis_or_fibre"] == "Y"
     assert old_acc_y["section"] == "INT"
+    assert old_acc_y["glyph_orientation"] == {"x": 0.0, "y": 0.0, "z": 1.0}
+
+    bridge_geometry = json.loads((result.output_dir / "bridge_geometry.json").read_text(encoding="utf-8"))
+    assert bridge_geometry["cross_section"]["web_top_outer_width"] == pytest.approx(4.0 / 45.0)
+    assert bridge_geometry["cross_section"]["inner_bottom_width"] == pytest.approx(4.0 / 45.0)
+    assert bridge_geometry["world"]["bridge_length_m"] == 90.0
 
     metrics = json.loads((result.output_dir / "sensor_metrics.json").read_text(encoding="utf-8"))
     assert any(

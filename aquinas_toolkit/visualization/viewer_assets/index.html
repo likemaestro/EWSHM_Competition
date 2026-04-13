@@ -19,7 +19,13 @@
       <header class="topbar">
         <div class="brand">
           <p class="eyebrow">AQUINAS</p>
-          <h1>Bridge Structural Viewer</h1>
+          <div>
+            <div class="brand-title-row">
+              <h1>Bridge Structural Viewer</h1>
+              <span class="wip-badge" title="Proxy metrics only — health scoring not yet implemented">WIP</span>
+            </div>
+            <p class="brand-subtitle">Analytical bridge geometry and sensor behavior across AQUINAS datasets.</p>
+          </div>
         </div>
 
         <div class="topbar-controls">
@@ -33,92 +39,144 @@
             <select id="metric-select"></select>
           </div>
 
-          <div class="control">
-            <span>Family</span>
-            <div class="segmented" id="family-toggle"></div>
-          </div>
-
-          <div class="control">
-            <span>Spacing</span>
-            <div class="segmented" id="view-toggle"></div>
-          </div>
-
-          <div class="control">
-            <label for="compare-mode">Compare</label>
-            <select id="compare-mode">
-              <option value="single">Single</option>
-              <option value="homologous">Homologous</option>
-            </select>
-          </div>
-
-          <label class="inline-toggle">
-            <input id="correlation-toggle" type="checkbox" />
-            <span>Correlations</span>
-          </label>
-
-          <div class="control control--narrow">
-            <span>&nbsp;</span>
-            <button id="reset-camera" class="ghost-button" type="button">Reset view</button>
-          </div>
+          <button id="reset-camera" class="ghost-button" type="button">Reset view</button>
         </div>
       </header>
 
-      <main class="workspace">
-        <aside class="left-rail">
-          <div class="panel">
-            <div class="panel-header">
-              <h2>Filters</h2>
-              <button id="reset-filters" class="ghost-button" type="button">Reset</button>
-            </div>
-            <div id="filter-groups" class="filter-groups"></div>
-          </div>
+      <nav class="tabbar" aria-label="Viewer sections">
+        <button class="tab-button active" data-tab="scene" type="button">3D View</button>
+        <button class="tab-button" data-tab="analysis" type="button">Sensor Analysis</button>
+        <button class="tab-button" data-tab="datasets" type="button">Datasets</button>
+      </nav>
 
-          <div class="panel legend-panel">
-            <h2>Legend</h2>
-            <ul class="legend-list">
-              <li><span class="legend-chip acc"></span>Accelerometer</li>
-              <li><span class="legend-chip str"></span>Strain gauge</li>
-              <li><span class="legend-chip high"></span>High relative value</li>
-              <li><span class="legend-chip old"></span>OLD deck</li>
-              <li><span class="legend-chip new"></span>NEW deck</li>
-            </ul>
-            <p class="legend-note">
-              Drag to orbit · Scroll to zoom · Right-drag to pan.
-              Sensor positions are normalized analytical coordinates.
-            </p>
-          </div>
-        </aside>
+      <main class="tab-panels">
+        <section class="tab-panel active" data-tab-panel="scene">
+          <div class="scene-layout">
+            <aside class="scene-sidebar">
+              <div class="panel">
+                <div class="panel-header">
+                  <div>
+                    <h2>View Controls</h2>
+                    <p class="panel-subtitle">Geometry and comparison settings for the 3D scene.</p>
+                  </div>
+                </div>
 
-        <section class="center-stage">
-          <div class="panel stage-panel">
-            <div class="panel-header">
-              <div>
-                <h2 id="stage-title">Bridge scene</h2>
-                <p id="stage-subtitle" class="panel-subtitle"></p>
+                <div class="control-stack">
+                  <div class="control">
+                    <span>Family</span>
+                    <div class="segmented" id="family-toggle"></div>
+                  </div>
+
+                  <div class="control">
+                    <label for="compare-mode">Compare</label>
+                    <select id="compare-mode">
+                      <option value="single">Single</option>
+                      <option value="homologous">Homologous</option>
+                    </select>
+                  </div>
+
+                  <label class="inline-toggle">
+                    <input id="correlation-toggle" type="checkbox" />
+                    <span>Show correlations</span>
+                  </label>
+
+                  <button id="reset-filters" class="ghost-button" type="button">Reset filters</button>
+                </div>
               </div>
-              <div class="status-strip" id="status-strip"></div>
-            </div>
 
-            <div id="scene-wrap" class="scene-wrap">
-              <canvas id="bridge-canvas"></canvas>
-              <div id="tooltip" class="tooltip hidden"></div>
-            </div>
+              <div class="panel">
+                <h2>Selection</h2>
+                <div id="scene-selection" class="selection-summary"></div>
+              </div>
+
+              <details class="panel disclosure" open>
+                <summary>
+                  <span>Filters</span>
+                </summary>
+                <div id="filter-groups" class="filter-groups"></div>
+              </details>
+
+              <details class="panel disclosure">
+                <summary>
+                  <span>Legend</span>
+                </summary>
+                <ul class="legend-list">
+                  <li><span class="legend-chip acc"></span>Accelerometer</li>
+                  <li><span class="legend-chip str"></span>Strain sensor</li>
+                  <li><span class="legend-chip high"></span>High relative value</li>
+                  <li><span class="legend-chip old"></span>OLD deck</li>
+                  <li><span class="legend-chip new"></span>NEW deck</li>
+                </ul>
+                <p class="legend-note">
+                  Drag to orbit, scroll to zoom, and right-drag to pan. Double-click a marker to
+                  isolate its local neighborhood.
+                </p>
+              </details>
+            </aside>
+
+            <section class="panel stage-panel">
+              <div class="panel-header">
+                <div>
+                  <h2 id="stage-title">Bridge scene</h2>
+                  <p id="stage-subtitle" class="panel-subtitle"></p>
+                </div>
+                <div class="status-strip" id="status-strip"></div>
+              </div>
+
+              <div id="scene-wrap" class="scene-wrap">
+                <canvas id="bridge-canvas"></canvas>
+                <div id="tooltip" class="tooltip hidden"></div>
+              </div>
+            </section>
           </div>
         </section>
 
-        <aside class="right-rail">
-          <div class="panel">
-            <h2>Inspector</h2>
-            <div id="inspector" class="inspector"></div>
-          </div>
-        </aside>
-      </main>
+        <section class="tab-panel" data-tab-panel="analysis">
+          <div class="analysis-layout">
+            <section class="panel analysis-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Sensor Analysis</h2>
+                  <p class="panel-subtitle" id="analysis-subtitle">
+                    Inspect the selected sensor, its homologous partner, trends, and waveform
+                    context.
+                  </p>
+                </div>
+              </div>
 
-      <footer class="timeline">
-        <h2>Dataset timeline</h2>
-        <p>Switch monthly snapshots without leaving the current spatial context.</p>
-        <div id="dataset-strip" class="dataset-strip"></div>
-      </footer>
+              <div id="inspector" class="inspector analysis-grid"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="datasets">
+          <div class="datasets-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Dataset Timeline</h2>
+                  <p class="panel-subtitle">
+                    Switch monthly snapshots while keeping the same spatial model and metric.
+                  </p>
+                </div>
+              </div>
+              <div id="dataset-strip" class="dataset-strip"></div>
+            </section>
+
+            <section class="panel dataset-notes">
+              <h2>Context</h2>
+              <p class="card-note">
+                The viewer uses analytical bridge geometry paired with index-table proxy metrics
+                until later scoring stages are implemented.
+              </p>
+              <p class="card-note">
+                Sensor positions reflect handbook topology plus a small readability offset so
+                markers stay visible without drifting away from their structural mounting surfaces.
+              </p>
+            </section>
+          </div>
+        </section>
+      </main>
     </div>
 
     <script type="module" src="./viewer.js"></script>
