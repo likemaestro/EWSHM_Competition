@@ -11,11 +11,16 @@ import pandas as pd
 import yaml
 
 from aquinas_toolkit.feature_extraction.store import FeaturesStoreWriter, features_store_path
+from aquinas_toolkit.io import parse_sensor_name
 from aquinas_toolkit.feature_extraction.workflow import (
     collect_preprocessed_event_matrices,
     run_acc_z_fdd_from_event_matrices,
 )
-from aquinas_toolkit.preprocessing.store import open_preprocess_store, preprocess_store_path
+from aquinas_toolkit.preprocessing.store import (
+    _to_optional_float,
+    open_preprocess_store,
+    preprocess_store_path,
+)
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir
 
 
@@ -131,7 +136,7 @@ def _build_sensor_event_feature_rows(
 
         for sensor in event_sensors.itertuples(index=False):
             sensor_name = str(sensor.sensor_name)
-            metadata = _parse_sensor_name(sensor_name)
+            metadata = parse_sensor_name(sensor_name)
             waveform_stats = _compute_waveform_statistics(
                 timestamps=aligned_event.get("timestamp_utc", pd.Series(dtype="datetime64[ns, UTC]")),
                 values=aligned_event.get(sensor_name, pd.Series(dtype=float)),
@@ -377,21 +382,3 @@ def _zero_crossing_rate(values: np.ndarray) -> float:
     return float(crossings / (len(values) - 1))
 
 
-def _parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
-    parts = sensor_name.split("_")
-    return {
-        "deck": parts[0] if len(parts) > 0 else None,
-        "span": parts[1] if len(parts) > 1 else None,
-        "side": parts[2] if len(parts) > 2 else None,
-        "location": parts[3] if len(parts) > 3 else None,
-        "quantity": parts[4] if len(parts) > 4 else None,
-        "axis": parts[5] if len(parts) > 5 else None,
-    }
-
-
-def _to_optional_float(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    if pd.isna(value):
-        return None
-    return float(value)

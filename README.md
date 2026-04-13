@@ -94,7 +94,7 @@ EWSHM_Competition/
 |---|---|---|
 | `aquinas_toolkit.io` | Implemented | `AquinasReader` loads index tables and raw waveforms |
 | `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
-| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, and preprocess dispatch; feature/train/score pending |
+| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess and features dispatch; train and score pending |
 | `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
 | `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering → zeroing → alignment pipeline with manifests and QC artifacts |
 | `aquinas_toolkit.feature_extraction` | Partial | FDD modal analysis (peak picking, mode shapes) implemented; time-domain features pending |
@@ -281,10 +281,10 @@ per-stage status (`not_started`, `running`, `completed`, `failed`).
 
 Current limitation:
 
-- `aquinas run features`, `aquinas run train`, and `aquinas run score` enforce
-  stage order and update metadata but the corresponding algorithms are not yet
-  wired into the CLI. The preprocessing stage (`aquinas run preprocess`) is
-  fully implemented.
+- The `features` stage is fully wired and will execute FDD modal analysis and
+  time-domain feature extraction. The `train` and `score` stages enforce stage
+  order and update metadata but the corresponding algorithms are not yet wired
+  into the CLI.
 
 ### 5. Rebuild or open the viewer
 

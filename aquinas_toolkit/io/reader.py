@@ -18,6 +18,31 @@ from pathlib import Path
 import pandas as pd
 
 
+def parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
+    """Parse an AQUINAS sensor name into its component fields.
+
+    Returns a dict with keys ``deck``, ``span``, ``side``, ``location``,
+    ``quantity``, and ``axis``.  Missing parts (short names) are returned as
+    ``None`` rather than raising an error, making this safe for defensive use
+    in storage and feature-extraction contexts.
+
+    Example::
+
+        >>> parse_sensor_name("NEW_S1_DO_MID_ACC_Z")
+        {'deck': 'NEW', 'span': 'S1', 'side': 'DO', 'location': 'MID',
+         'quantity': 'ACC', 'axis': 'Z'}
+    """
+    parts = sensor_name.split("_")
+    return {
+        "deck": parts[0] if len(parts) > 0 else None,
+        "span": parts[1] if len(parts) > 1 else None,
+        "side": parts[2] if len(parts) > 2 else None,
+        "location": parts[3] if len(parts) > 3 else None,
+        "quantity": parts[4] if len(parts) > 4 else None,
+        "axis": parts[5] if len(parts) > 5 else None,
+    }
+
+
 class AquinasReader:
     """
     Generic reader for any AQUINAS_SET* folder.

@@ -17,6 +17,10 @@ dependencies = [
     "rich>=13.7",
     "jupyter",
     "jupyterlab",
+]
+
+[project.optional-dependencies]
+dev = [
     "pytest",
     "ruff",
 ]

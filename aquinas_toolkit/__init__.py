@@ -7,7 +7,7 @@ EWSHM 2026 structural health monitoring competition.
 The toolkit follows a pipeline architecture:
 
     reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-    (done)       (done)              (TODO)         (TODO)       (TODO)
+    (done)       (done)              (partial)               (stub)          (stub)
 
 Quick start::
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -178,8 +179,6 @@ def _execute_stage(stage: str, run_context: RunContext) -> None:
             f"Not yet implemented. See aquinas_toolkit/{target}/ "
             f"(run {run_context.run_id}, config {run_context.config_path})."
         )
-
-    import importlib
 
     module_path, func_name = _STAGE_REGISTRY[stage].split(":")
     module = importlib.import_module(module_path)

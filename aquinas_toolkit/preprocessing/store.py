@@ -9,6 +9,7 @@ from typing import Any, Iterable, Sequence
 
 import pandas as pd
 
+from aquinas_toolkit.io import parse_sensor_name
 from aquinas_toolkit.preprocessing.core import collapse_sensor_records
 
 
@@ -848,7 +849,7 @@ def _upsert_sensors(
         return
     rows = []
     for sensor_name in sensor_names:
-        parsed = _parse_sensor_name(sensor_name)
+        parsed = parse_sensor_name(sensor_name)
         rows.append(
             (
                 sensor_name,
@@ -1016,27 +1017,6 @@ def _legacy_aligned_partition_path(stage_dir: Path, *, set_name: str, deck: str)
                 if candidate.is_file():
                     return candidate
     return None
-
-
-def _parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
-    parts = sensor_name.split("_")
-    if len(parts) < 5:
-        return {
-            "deck": parts[0] if parts else None,
-            "span": parts[1] if len(parts) > 1 else None,
-            "side": parts[2] if len(parts) > 2 else None,
-            "location": parts[3] if len(parts) > 3 else None,
-            "quantity": parts[4] if len(parts) > 4 else None,
-            "axis": parts[5] if len(parts) > 5 else None,
-        }
-    return {
-        "deck": parts[0],
-        "span": parts[1],
-        "side": parts[2],
-        "location": parts[3],
-        "quantity": parts[4],
-        "axis": parts[5] if len(parts) > 5 else None,
-    }
 
 
 def _to_int(value: Any) -> int:

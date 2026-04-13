@@ -35,6 +35,8 @@ from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS, filter_
 from aquinas_toolkit.preprocessing.store import (
     ALIGNED_SAMPLE_COLUMNS,
     EVENT_SENSOR_COLUMNS,
+    SENSOR_QC_COLUMNS as SENSOR_QC_REPORT_COLUMNS,
+    SENSOR_RECORD_COLUMNS,
     PreprocessStoreWriter,
     preprocess_store_path,
 )
@@ -60,56 +62,6 @@ EVENT_MANIFEST_COLUMNS = [
     "discard_reason",
     "zeroing_method",
 ]
-
-SENSOR_RECORD_COLUMNS = [
-    "table_row_index",
-    "Record_UID",
-    "File",
-    "Start_Row",
-    "End_Row",
-    "Start_Time",
-    "End_Time",
-    "Duration",
-    "Start_Value",
-    "End_Value",
-    "Diff_Value",
-    "Min_Value",
-    "Max_Value",
-    "Mean_Value",
-    "Range",
-    "Temperature",
-    "sensor_name",
-    "dataset",
-    "set_name",
-    "deck",
-    "sensor_order",
-    "start_time_utc",
-    "end_time_utc",
-    "raw_file",
-    "start_row_1based",
-    "end_row_1based",
-    "event_id",
-    "sensor_status",
-    "exclusion_reason",
-    "exclusion_source",
-]
-
-SENSOR_QC_REPORT_COLUMNS = [
-    "set_name",
-    "sensor_name",
-    "event_count",
-    "sensor_status",
-    "exclusion_reason",
-    "exclusion_source",
-    "table_range_median",
-    "table_range_nonzero_fraction",
-    "table_mean_abs_median",
-    "table_start_value_median",
-    "table_end_value_median",
-    "raw_range_spotcheck_median",
-    "raw_to_table_range_ratio_spotcheck",
-]
-
 
 @dataclass(frozen=True)
 class SensorExclusion:

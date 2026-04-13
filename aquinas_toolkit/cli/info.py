@@ -53,7 +53,7 @@ def _summarize_set(set_dir: Path) -> dict[str, str]:
     first_table = reader.load_index_table(sensors[0])
     event_count = len(first_table)
 
-    start_col = reader._match_column(first_table, ["Start_Time", "start_time"])
+    start_col = reader.match_column(first_table, ["Start_Time", "start_time"])
     if start_col:
         times = first_table[start_col].sort_values()
         date_range = f"{times.iloc[0]} .. {times.iloc[-1]}"

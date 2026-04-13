@@ -96,17 +96,17 @@ def find_common_sensor_events(
     if filtered.empty:
         return pd.DataFrame()
 
-    start_col = _require_column(filtered, ["Start_Time", "start_time"])
-    end_col = _require_column(filtered, ["End_Time", "end_time"])
+    start_time_col = _require_column(filtered, ["Start_Time", "start_time"])
+    end_time_col = _require_column(filtered, ["End_Time", "end_time"])
 
     expected_sensors = sorted(filtered["sensor_name"].unique())
     grouped = (
-        filtered.groupby([start_col, end_col], as_index=False)
+        filtered.groupby([start_time_col, end_time_col], as_index=False)
         .agg(
             sensor_count=("sensor_name", "nunique"),
             sensor_names=("sensor_name", lambda values: sorted(set(values))),
         )
-        .rename(columns={start_col: "Start_Time", end_col: "End_Time"})
+        .rename(columns={start_time_col: "Start_Time", end_time_col: "End_Time"})
     )
     common = grouped[grouped["sensor_count"] == len(expected_sensors)].copy()
     common["dataset"] = reader.set_name
@@ -129,9 +129,9 @@ def load_common_event_waveform_matrix(
 
     for sensor_name in sensor_names:
         index_df = reader.load_index_table(sensor_name)
-        start_col = _require_column(index_df, ["Start_Time", "start_time"])
-        end_col = _require_column(index_df, ["End_Time", "end_time"])
-        matches = index_df[(index_df[start_col] == start_time) & (index_df[end_col] == end_time)]
+        start_time_col = _require_column(index_df, ["Start_Time", "start_time"])
+        end_time_col = _require_column(index_df, ["End_Time", "end_time"])
+        matches = index_df[(index_df[start_time_col] == start_time) & (index_df[end_time_col] == end_time)]
         if matches.empty:
             raise ValueError(
                 f"No event found for sensor {sensor_name} with Start_Time={start_time} and End_Time={end_time}."

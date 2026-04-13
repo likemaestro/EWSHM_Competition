@@ -9,6 +9,8 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from aquinas_toolkit.preprocessing.store import _normalize_sql_value
+
 
 FEATURES_DB_NAME = "features.sqlite"
 FEATURES_SCHEMA_VERSION = 1
@@ -111,6 +113,7 @@ class FeaturesStoreWriter:
 
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        _configure_features_connection(self.conn)
         self._create_schema()
         self.conn.execute(
             """
@@ -137,6 +140,12 @@ class FeaturesStoreWriter:
     def close(self) -> None:
         """Close the SQLite connection."""
         self.conn.close()
+
+    def __enter__(self) -> FeaturesStoreWriter:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        self.close()
 
     def write_sensor_event_features(self, rows: list[dict[str, Any]]) -> None:
         """Append per-sensor per-event features."""
@@ -346,17 +355,8 @@ def open_features_store(path_or_stage_dir: str | Path) -> FeaturesStoreReader:
     return FeaturesStoreReader(path_or_stage_dir)
 
 
-def _normalize_sql_value(value: Any) -> Any:
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    if hasattr(value, "item") and callable(value.item):
-        try:
-            return value.item()
-        except (ValueError, TypeError):
-            return value
-    return value
+def _configure_features_connection(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")

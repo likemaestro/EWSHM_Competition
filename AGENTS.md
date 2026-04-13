@@ -23,7 +23,7 @@ clarity, correctness, and reproducibility over enterprise patterns.
 
 ```
 reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-[implemented]     [implemented]       [stub]               [stub]       [stub]
+[implemented]     [implemented]       [partial]            [stub]       [stub]
 ```
 
 - **Library code** lives in `aquinas_toolkit/`. Every reusable function
@@ -70,9 +70,9 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 | Package | Status | Purpose |
 |---|---|---|
 | `io/` | Implemented | `AquinasReader` -- load index tables and raw waveforms |
-| `cli/` | Implemented | Run lifecycle, metadata, latest-pointer resolution, and preprocess-stage dispatch (feature/train/score registration pending) |
+| `cli/` | Implemented | Run lifecycle, metadata, latest-pointer resolution, and full stage dispatch (preprocess + features wired; train and score stubs) |
 | `preprocessing/` | Implemented | Deck-aware event grouping, timestamp alignment, zeroing, and preprocess-stage artifacts |
-| `feature_extraction/` | Stub | Time-domain and frequency-domain feature extraction |
+| `feature_extraction/` | Partial | FDD modal analysis done (pipeline.py, fdd.py, workflow.py); time-domain features pending |
 | `training/` | Stub | Unsupervised anomaly/trend detection models |
 | `utils/` | Implemented | Shared utilities: plotting helpers (`plotting.py`) and run-management helpers (`run_management.py`) used by the CLI and notebooks |
 | `scoring/` | Stub | Aggregate per-sensor scores into a global health score |
