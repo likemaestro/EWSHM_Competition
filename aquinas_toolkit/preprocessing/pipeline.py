@@ -624,7 +624,7 @@ def _write_summary(
         },
         "zeroing": {
             "method": settings.zeroing_method,
-            "stage": "after_signal_filter_before_alignment",
+            "stage": "before_alignment",
         },
         "alignment": {
             "method": settings.alignment_method,

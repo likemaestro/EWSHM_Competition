@@ -67,7 +67,7 @@ EWSHM_Competition/
 │   ├── training/             Unsupervised anomaly models           [stub]
 │   ├── utils/                Shared utilities (plotting)           [implemented]
 │   ├── scoring/              Health score synthesis                [stub]
-│   └── visualization/        Offline 3D bridge viewer             [implemented]
+│   └── visualization/        Offline 3D bridge viewer              [implemented]
 │
 ├── AGENTS.md                 Instructions for coding agents
 ├── pyproject.toml            Package metadata and CLI entry point

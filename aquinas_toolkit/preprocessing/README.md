@@ -128,6 +128,12 @@ steps, in this order:
 - `load_timestamp_query_frames()` mirrors the organizer helper's
   deck-plus-sensor selection order and widens duplicate sensor matches
   with `min(Start_Row):max(End_Row)` before waveform loading.
+- The default Butterworth implementation uses `scipy.signal.sosfiltfilt`.
+  Very short waveforms can be shorter than the filter's required padding
+  length; in that case the preprocessing helpers leave the waveform
+  unchanged instead of raising an error. This keeps batch preprocessing
+  robust for tiny synthetic or edge-case records while still filtering
+  normal-length signals.
 - Config-driven exclusions are applied before waveform loading in the
   batch preprocess stage, so an excluded sensor never enters the
   signal-conditioning or synchronization loop for that stage run.
@@ -201,6 +207,14 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 - Manifest, sensor-record, aligned-export, and summary artifacts
 - Local Python-vs-R parity validation against the original helper
 - Notebook examples that exercise the package API instead of embedding logic
+
+Additional implementation notes:
+
+- Short-waveform guard for the default Butterworth filter: too-short
+  signals are passed through unchanged instead of failing inside
+  `sosfiltfilt`.
+- Compatibility-preserving summary artifact contract: `summary.json`
+  keeps `zeroing.stage = before_alignment`.
 
 ## Which config fields are true knobs in v1
 

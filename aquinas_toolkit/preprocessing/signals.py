@@ -64,11 +64,15 @@ def filter_loaded_event_group(
         raise ValueError("low_hz must be strictly smaller than high_hz.")
 
     sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos")
+    min_samples = _min_samples_for_sosfiltfilt(sos)
     filtered_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
     for sensor_name, (meta, waveform) in event_group.waveforms.items():
         filtered = waveform.copy()
         values = pd.to_numeric(filtered[sensor_name], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-        filtered[sensor_name] = sosfiltfilt(sos, values)
+        if len(values) > min_samples:
+            filtered[sensor_name] = sosfiltfilt(sos, values)
+        else:
+            filtered[sensor_name] = values
         filtered_waveforms[sensor_name] = (meta.copy(), filtered)
 
     return replace(event_group, waveforms=filtered_waveforms)
@@ -178,6 +182,12 @@ def bandpass_filter_waveform_matrix(
         timestamp = waveform_matrix["timestamp"] if "timestamp" in waveform_matrix.columns else None
         numeric = waveform_matrix.drop(columns=["timestamp"], errors="ignore")
         sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos")
+        min_samples = _min_samples_for_sosfiltfilt(sos)
+        if len(numeric.index) <= min_samples:
+            filtered_df = numeric.copy()
+            if timestamp is not None:
+                filtered_df.insert(0, "timestamp", timestamp)
+            return filtered_df
         filtered = sosfiltfilt(sos, numeric.to_numpy(), axis=0)
         filtered_df = pd.DataFrame(filtered, columns=numeric.columns, index=waveform_matrix.index)
         if timestamp is not None:
@@ -186,7 +196,16 @@ def bandpass_filter_waveform_matrix(
 
     matrix = np.asarray(waveform_matrix, dtype=float)
     sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos")
+    if len(matrix) <= _min_samples_for_sosfiltfilt(sos):
+        return matrix
     return sosfiltfilt(sos, matrix, axis=0)
+
+
+def _min_samples_for_sosfiltfilt(sos: np.ndarray) -> int:
+    """Return the minimum input length needed for ``sosfiltfilt`` padding."""
+    n_sections = sos.shape[0]
+    zeros_at_origin = min((sos[:, 2] == 0).sum(), (sos[:, 5] == 0).sum())
+    return 3 * (2 * n_sections + 1 - int(zeros_at_origin))
 
 
 def _require_column(df: pd.DataFrame, candidates: list[str]) -> str:

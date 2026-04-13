@@ -18,6 +18,10 @@ from aquinas_toolkit.preprocessing import (
     zero_waveform,
 )
 from aquinas_toolkit.preprocessing.pipeline import load_preprocessing_settings
+from aquinas_toolkit.preprocessing.signals import (
+    bandpass_filter_waveform_matrix,
+    filter_loaded_event_group,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -956,6 +960,41 @@ def test_zero_waveform_single_sample_returns_zero_relative_value() -> None:
 def test_zero_waveform_rejects_unsupported_method() -> None:
     with pytest.raises(ValueError, match="Unsupported zeroing method"):
         zero_waveform(pd.Series([1.0, 2.0]), method="median")
+
+
+def test_filter_loaded_event_group_leaves_short_waveforms_unchanged() -> None:
+    waveform = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2022-07-01 00:00:00", "2022-07-01 00:00:01"], utc=True),
+            "NEW_S1_DO_INF_STR": [1.5, 2.5],
+        }
+    )
+    event_group = LoadedEventGroup(
+        event_id="short-event",
+        set_name="AQUINAS_SET1_2022_07",
+        deck="NEW",
+        start_time_utc=pd.Timestamp("2022-07-01T00:00:00Z"),
+        end_time_utc=pd.Timestamp("2022-07-01T00:00:01Z"),
+        sensor_records=pd.DataFrame(),
+        waveforms={"NEW_S1_DO_INF_STR": (pd.Series({"sensor_name": "NEW_S1_DO_INF_STR"}), waveform)},
+    )
+
+    filtered = filter_loaded_event_group(event_group)
+
+    assert filtered.waveforms["NEW_S1_DO_INF_STR"][1]["NEW_S1_DO_INF_STR"].tolist() == [1.5, 2.5]
+
+
+def test_bandpass_filter_waveform_matrix_leaves_short_inputs_unchanged() -> None:
+    waveform = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2022-07-01 00:00:00", "2022-07-01 00:00:01"], utc=True),
+            "NEW_S1_DO_INF_STR": [1.5, 2.5],
+        }
+    )
+
+    filtered = bandpass_filter_waveform_matrix(waveform)
+
+    pd.testing.assert_frame_equal(filtered, waveform)
 
 
 def test_align_event_group_returns_empty_frame_when_reference_sensor_has_no_rows() -> None:
