@@ -32,14 +32,14 @@ script in `pyproject.toml`.
 
 ## Progress reporting
 
-- `aquinas run` shows an outer pipeline progress bar (`preprocess -> features -> train -> score`)
-  and advances it once per completed stage.
+- `aquinas run` prints pipeline checkpoint lines after each completed stage
+  (`1/4 completed`, `2/4 completed`, ...) while stage-level progress remains visible.
 - Stage implementations own their inner progress details (for example,
   preprocess set/event progress and features extraction/modal/write phases).
 - `aquinas run <stage>` (single-stage invocations) shows only that stage's
-  inner progress. The outer pipeline progress bar is not shown.
+  inner progress. Pipeline checkpoint lines are not shown.
 - Visualization refresh remains a post-run action and is not counted as a
-  pipeline stage in the outer progress total.
+  pipeline stage total.
 - `aquinas run --verbose` prints detailed stage timing summaries to the console.
 - Every run writes `results/<run_id>/debug.log` with lifecycle entries, timing
   lines, and failure traces (even when `--verbose` is not used).

@@ -158,37 +158,33 @@ def run_command(
         stages_to_run = [stage]
 
     if stage is None:
-        with terminal.progress_context(transient=False) as progress:
-            pipeline_task = progress.add_task(
-                "Pipeline progress...",
-                total=len(stages_to_run),
-            )
-            for current_stage in stages_to_run:
-                progress.update(
-                    pipeline_task,
-                    description=f"Pipeline progress... ({current_stage})",
+        total_stages = len(stages_to_run)
+        for index, current_stage in enumerate(stages_to_run, start=1):
+            try:
+                _run_stage(current_stage, run_context)
+                terminal.print_stage_status(
+                    "STEP",
+                    "pipeline",
+                    f"{index}/{total_stages} completed ({current_stage})",
                 )
-                try:
-                    _run_stage(current_stage, run_context)
-                    progress.advance(pipeline_task)
-                except StageNotImplementedError as exc:
-                    debug_logger.exception(stage=current_stage, error=exc)
-                    _refresh_visualization_bundle(run_context)
-                    _print_visualization_hint()
-                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-                    return 1
-                except RunManagementError as exc:
-                    debug_logger.exception(stage=current_stage, error=exc)
-                    _refresh_visualization_bundle(run_context)
-                    _print_visualization_hint()
-                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-                    return 1
-                except Exception as exc:  # pragma: no cover - defensive path
-                    debug_logger.exception(stage=current_stage, error=exc)
-                    _refresh_visualization_bundle(run_context)
-                    _print_visualization_hint()
-                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-                    return 1
+            except StageNotImplementedError as exc:
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
+            except RunManagementError as exc:
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
+            except Exception as exc:  # pragma: no cover - defensive path
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
     else:
         for current_stage in stages_to_run:
             try:

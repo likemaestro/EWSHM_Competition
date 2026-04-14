@@ -137,10 +137,10 @@ def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Running full pipeline for run" in captured.out
-    assert "Pipeline progress" in captured.out
+    assert "STEP  pipeline 1/4 completed (preprocess)" in captured.out
     assert "START preprocess Run" in captured.out
     assert "START features Run" in captured.out
-    assert "Pipeline progress...START preprocess" not in captured.out
+    assert "Pipeline progress" not in captured.out
     assert "aquinas viz open" in captured.out
     assert "Not yet implemented" in captured.err
 
@@ -388,8 +388,9 @@ def test_run_full_pipeline_stops_after_train_failure(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "train boom" in captured.err
-    assert "Pipeline progress... (train)" in captured.out
-    assert "Pipeline progress... (score)" not in captured.out
+    assert "STEP  pipeline 2/4 completed (features)" in captured.out
+    assert "STEP  pipeline 3/4 completed (train)" not in captured.out
+    assert "STEP  pipeline 4/4 completed (score)" not in captured.out
     assert "START train Run" in captured.out
     assert executed_stages == ["preprocess", "features", "train"]
 
@@ -657,6 +658,7 @@ def test_run_single_stage_does_not_show_pipeline_progress(
 
     captured = capsys.readouterr()
     assert "Pipeline progress" not in captured.out
+    assert "STEP  pipeline" not in captured.out
 
 
 def test_run_writes_debug_log_even_without_verbose(
