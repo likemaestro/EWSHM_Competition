@@ -391,6 +391,7 @@ class LegacyPreprocessCsvReader:
         self.stage_dir = Path(stage_dir)
         self.manifest_path = self.stage_dir / "event_manifest.csv"
         self.sensor_records_path = self.stage_dir / "sensor_records.csv"
+        self._sensor_records_cache: pd.DataFrame | None = None
 
     def close(self) -> None:
         """Compatibility no-op."""
@@ -467,9 +468,7 @@ class LegacyPreprocessCsvReader:
 
     def load_event_sensors(self, event_id: str) -> pd.DataFrame:
         """Return one row per event/sensor from legacy sensor_records.csv."""
-        if not self.sensor_records_path.is_file():
-            raise FileNotFoundError(f"Legacy sensor records not found at {self.sensor_records_path}.")
-        sensor_records = pd.read_csv(self.sensor_records_path)
+        sensor_records = self._load_sensor_records()
         matched = sensor_records.loc[sensor_records["event_id"] == event_id].copy()
         if matched.empty:
             return pd.DataFrame(columns=EVENT_SENSOR_COLUMNS)
@@ -513,6 +512,23 @@ class LegacyPreprocessCsvReader:
                 }
             )
         return pd.DataFrame(rows, columns=EVENT_SENSOR_COLUMNS)
+
+    def _load_sensor_records(self) -> pd.DataFrame:
+        """Load and cache legacy sensor records with stable dtypes."""
+        if self._sensor_records_cache is None:
+            if not self.sensor_records_path.is_file():
+                raise FileNotFoundError(
+                    f"Legacy sensor records not found at {self.sensor_records_path}."
+                )
+            self._sensor_records_cache = pd.read_csv(
+                self.sensor_records_path,
+                dtype={
+                    "exclusion_reason": "string",
+                    "exclusion_source": "string",
+                },
+                low_memory=False,
+            )
+        return self._sensor_records_cache
 
     def load_aligned_event(
         self,

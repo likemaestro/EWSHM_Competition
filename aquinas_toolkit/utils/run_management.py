@@ -43,6 +43,8 @@ class RunContext:
     run_dir: Path
     config_path: Path
     metadata_path: Path
+    debug_log_path: Path
+    verbose: bool = False
 
 
 def get_default_config_path() -> Path:
@@ -119,6 +121,7 @@ def create_run(name: str | None = None) -> RunContext:
         run_dir=run_dir,
         config_path=run_config_path,
         metadata_path=metadata_path,
+        debug_log_path=run_dir / "debug.log",
     )
 
 
@@ -153,6 +156,7 @@ def resolve_run(run_id: str | None = None) -> RunContext:
         run_dir=run_dir,
         config_path=run_config_path,
         metadata_path=metadata_path,
+        debug_log_path=run_dir / "debug.log",
     )
 
 

@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Iterator, TextIO
 
 from rich import box
 from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -24,8 +36,16 @@ CLI_THEME = Theme(
         "warning": "yellow",
         "error": "bold red",
         "muted": "dim",
+        "status_start": "bold bright_blue",
+        "status_done": "bold green",
+        "status_fail": "bold red",
+        "status_tip": "bold yellow",
+        "stage_set": "bold magenta",
+        "stage_modal": "bold bright_magenta",
     }
 )
+
+_ACTIVE_PROGRESS: ContextVar[Progress | None] = ContextVar("_ACTIVE_PROGRESS", default=None)
 
 
 class CLIView:
@@ -86,6 +106,38 @@ def get_console(*, stderr: bool = False) -> Console:
     return _shared_console(stderr, no_color, id(stream))
 
 
+def build_progress(*, transient: bool = False) -> Progress:
+    """Build a Rich progress display using the shared CLI console and theme."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=get_console(),
+        transient=transient,
+    )
+
+
+@contextmanager
+def progress_context(*, transient: bool = False) -> Iterator[Progress]:
+    """Yield the active shared progress display, creating one if needed."""
+    active_progress = _ACTIVE_PROGRESS.get()
+    if active_progress is not None:
+        yield active_progress
+        return
+
+    progress = build_progress(transient=transient)
+    with progress:
+        token = _ACTIVE_PROGRESS.set(progress)
+        try:
+            yield progress
+        finally:
+            _ACTIVE_PROGRESS.reset(token)
+
+
 def print_top_level_help() -> None:
     """Render the top-level CLI help view."""
     get_console().print(render_top_level_help())
@@ -132,7 +184,18 @@ def print_run_summary(
 
 def print_stage_status(prefix: str, stage: str, message: str, *, stderr: bool = False) -> None:
     """Render a styled stage lifecycle line."""
-    style = {"START": "accent", "DONE": "success", "FAIL": "error"}.get(prefix, "accent")
+    style = {
+        "START": "status_start",
+        "DONE": "status_done",
+        "FAIL": "status_fail",
+        "TIP": "status_tip",
+    }.get(prefix, "accent")
+    active_progress = _ACTIVE_PROGRESS.get()
+    if active_progress is not None and not stderr:
+        if prefix in {"START", "DONE", "FAIL"}:
+            active_progress.console.print()
+        active_progress.console.print(_status_text(prefix, stage, message, style))
+        return
     get_console(stderr=stderr).print(_status_text(prefix, stage, message, style))
 
 
@@ -249,6 +312,7 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
             ("Stages", ", ".join(stages)),
             ("--name", "Optional label stored in metadata when creating a new run."),
             ("--run-id", "Explicit run to resume for features, train, or score."),
+            ("--verbose", "Print detailed timing breakdowns to the console."),
             ("--help", "Show this help message."),
         ]
     )
@@ -260,6 +324,7 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
         "Options:\n"
         "  --name    Optional label stored in metadata when creating a new run.\n"
         "  --run-id  Explicit run to resume for features, train, or score.\n"
+        "  --verbose Print detailed timing breakdowns to the console.\n"
         "  --help    Show this help message."
     )
 

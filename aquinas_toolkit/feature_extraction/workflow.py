@@ -7,7 +7,7 @@ Adapted into reusable helpers from the feature-extraction notebook workflow.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -116,6 +116,8 @@ def collect_preprocessed_event_matrices(
     axis: str = "Z",
     min_common_events: int = 2,
     max_events: int | None = 5,
+    on_candidate_event: Callable[[], None] | None = None,
+    on_selected_event: Callable[[], None] | None = None,
 ) -> PreprocessedEventCollection:
     """Collect aligned event matrices from preprocess outputs for notebook and stage reuse."""
     retained_events = preprocess_store.iter_retained_events(set_name=set_name, deck=deck)
@@ -156,6 +158,8 @@ def collect_preprocessed_event_matrices(
         candidate_sensor_sets.append(sensor_names)
         for sensor_name, sensor_order in matching:
             candidate_sensor_orders.setdefault(sensor_name, sensor_order)
+        if on_candidate_event is not None:
+            on_candidate_event()
 
     available_events = pd.DataFrame(candidate_rows)
     if available_events.empty:
@@ -199,24 +203,28 @@ def collect_preprocessed_event_matrices(
     aligned_events: list[pd.DataFrame] = []
     used_rows: list[dict[str, Any]] = []
     for event in selected_candidates.itertuples(index=False):
-        aligned_event = preprocess_store.load_aligned_event(event.event_id, sensor_names=common_channels)
-        if aligned_event.empty:
-            continue
-        numeric = aligned_event[common_channels].dropna(axis=0, how="any").reset_index(drop=True)
-        if len(numeric.index) < 2:
-            continue
-        aligned_events.append(numeric)
-        used_rows.append(
-            {
-                "event_id": str(event.event_id),
-                "set_name": str(event.set_name),
-                "deck": str(event.deck),
-                "start_time_utc": event.start_time_utc,
-                "end_time_utc": event.end_time_utc,
-                "channel_count": len(common_channels),
-                "row_count": int(len(numeric.index)),
-            }
-        )
+        try:
+            aligned_event = preprocess_store.load_aligned_event(event.event_id, sensor_names=common_channels)
+            if aligned_event.empty:
+                continue
+            numeric = aligned_event[common_channels].dropna(axis=0, how="any").reset_index(drop=True)
+            if len(numeric.index) < 2:
+                continue
+            aligned_events.append(numeric)
+            used_rows.append(
+                {
+                    "event_id": str(event.event_id),
+                    "set_name": str(event.set_name),
+                    "deck": str(event.deck),
+                    "start_time_utc": event.start_time_utc,
+                    "end_time_utc": event.end_time_utc,
+                    "channel_count": len(common_channels),
+                    "row_count": int(len(numeric.index)),
+                }
+            )
+        finally:
+            if on_selected_event is not None:
+                on_selected_event()
 
     selected_events = pd.DataFrame(used_rows)
     if len(aligned_events) < min_common_events:

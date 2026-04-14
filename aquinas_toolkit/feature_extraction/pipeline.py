@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import yaml
+from rich.progress import Progress
 
+from aquinas_toolkit.cli.terminal import progress_context
 from aquinas_toolkit.feature_extraction.store import FeaturesStoreWriter, features_store_path
 from aquinas_toolkit.io import parse_sensor_name
 from aquinas_toolkit.feature_extraction.workflow import (
@@ -21,6 +24,7 @@ from aquinas_toolkit.preprocessing.store import (
     open_preprocess_store,
     preprocess_store_path,
 )
+from aquinas_toolkit.utils.debug_logging import RunDebugLogger
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir
 
 
@@ -50,6 +54,28 @@ class FeatureSettings:
 
 def run_features(run_context: RunContext) -> None:
     """Execute the features stage from the preprocess SQLite store."""
+    stage_start = perf_counter()
+    debug_logger = RunDebugLogger(run_context.debug_log_path, verbose=run_context.verbose)
+    timings: dict[str, float] = {
+        "open_preprocess_store_s": 0.0,
+        "load_retained_events_s": 0.0,
+        "load_event_sensors_s": 0.0,
+        "load_aligned_event_s": 0.0,
+        "waveform_feature_compute_s": 0.0,
+        "modal_collect_s": 0.0,
+        "modal_fdd_s": 0.0,
+        "write_sensor_event_features_s": 0.0,
+        "write_feature_family_status_s": 0.0,
+        "write_deck_modal_peaks_s": 0.0,
+        "write_mode_shape_components_s": 0.0,
+    }
+    counts: dict[str, int] = {
+        "retained_events": 0,
+        "sensor_rows_written": 0,
+        "modal_peak_rows_written": 0,
+        "mode_shape_rows_written": 0,
+    }
+
     settings = load_feature_settings(run_context.config_path)
     preprocess_dir = stage_output_dir(run_context.run_dir, "preprocess")
     preprocess_db_path = preprocess_store_path(preprocess_dir)
@@ -70,22 +96,75 @@ def run_features(run_context: RunContext) -> None:
     )
 
     try:
-        with open_preprocess_store(preprocess_dir) as preprocess_store:
-            sensor_feature_rows = _build_sensor_event_feature_rows(
-                preprocess_store,
-                sampling_rate_hz=settings.sampling_rate_hz,
-            )
-            writer.write_sensor_event_features(sensor_feature_rows)
+        with progress_context(transient=False) as progress:
+            progress.console.print("  [accent]Loading preprocess artifacts...[/]")
+            load_task = progress.add_task("  Opening preprocess store...", total=None)
+            open_start = perf_counter()
+            with open_preprocess_store(preprocess_dir) as preprocess_store:
+                timings["open_preprocess_store_s"] += perf_counter() - open_start
+                progress.remove_task(load_task)
+                retained_start = perf_counter()
+                retained_events = preprocess_store.iter_retained_events()
+                timings["load_retained_events_s"] += perf_counter() - retained_start
+                counts["retained_events"] = int(len(retained_events.index))
+                sensor_feature_rows = _build_sensor_event_feature_rows(
+                    preprocess_store,
+                    retained_events=retained_events,
+                    sampling_rate_hz=settings.sampling_rate_hz,
+                    progress=progress,
+                    timings=timings,
+                )
+                counts["sensor_rows_written"] = len(sensor_feature_rows)
 
-            family_status_rows, peak_rows, component_rows = _build_modal_feature_rows(
-                preprocess_store,
-                settings=settings,
+                family_status_rows, peak_rows, component_rows = _build_modal_feature_rows(
+                    preprocess_store,
+                    retained_events=retained_events,
+                    settings=settings,
+                    progress=progress,
+                    timings=timings,
+                )
+                counts["modal_peak_rows_written"] = len(peak_rows)
+                counts["mode_shape_rows_written"] = len(component_rows)
+
+                progress.console.print("  [accent]Writing feature store...[/]")
+                write_task = progress.add_task("  Persisting features.sqlite...", total=None)
+                try:
+                    write_start = perf_counter()
+                    writer.write_sensor_event_features(sensor_feature_rows)
+                    timings["write_sensor_event_features_s"] += perf_counter() - write_start
+                    write_start = perf_counter()
+                    writer.write_feature_family_status(family_status_rows)
+                    timings["write_feature_family_status_s"] += perf_counter() - write_start
+                    write_start = perf_counter()
+                    writer.write_deck_modal_peaks(peak_rows)
+                    timings["write_deck_modal_peaks_s"] += perf_counter() - write_start
+                    write_start = perf_counter()
+                    writer.write_deck_mode_shape_components(component_rows)
+                    timings["write_mode_shape_components_s"] += perf_counter() - write_start
+                finally:
+                    progress.remove_task(write_task)
+
+            progress.console.print(
+                "  [success]wrote[/] "
+                f"{len(sensor_feature_rows):,} sensor-event rows  "
+                f"{len(peak_rows):,} modal peaks  "
+                f"{len(component_rows):,} mode-shape components"
             )
-            writer.write_feature_family_status(family_status_rows)
-            writer.write_deck_modal_peaks(peak_rows)
-            writer.write_deck_mode_shape_components(component_rows)
     finally:
         writer.close()
+
+    timings["total_stage_s"] = perf_counter() - stage_start
+    for phase, seconds in timings.items():
+        count_value = None
+        if phase == "load_event_sensors_s":
+            count_value = counts["retained_events"]
+        elif phase == "load_aligned_event_s":
+            count_value = counts["retained_events"]
+        elif phase == "waveform_feature_compute_s":
+            count_value = counts["sensor_rows_written"]
+        debug_logger.timing(stage="features", phase=phase, seconds=seconds, count=count_value)
+    debug_logger.log("FEATURE_COUNTS", **counts)
+    debug_logger.verbose_timing_summary(stage="features", timings=timings)
 
 
 def load_feature_settings(config_path: Path) -> FeatureSettings:
@@ -118,13 +197,28 @@ def load_feature_settings(config_path: Path) -> FeatureSettings:
 def _build_sensor_event_feature_rows(
     preprocess_store: Any,
     *,
+    retained_events: pd.DataFrame,
     sampling_rate_hz: float,
+    progress: Progress,
+    timings: dict[str, float],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    retained_events = preprocess_store.iter_retained_events()
+    if retained_events.empty:
+        progress.console.print("  [warning]No retained events found for sensor-event features.[/]")
+        return rows
+
+    progress.console.print("  [accent]Extracting sensor-event features...[/]")
+    feature_task = progress.add_task(
+        "  Computing sensor-event feature rows...",
+        total=len(retained_events.index),
+    )
     for event in retained_events.itertuples(index=False):
+        aligned_start = perf_counter()
         aligned_event = preprocess_store.load_aligned_event(event.event_id)
+        timings["load_aligned_event_s"] += perf_counter() - aligned_start
+        sensors_start = perf_counter()
         event_sensors = preprocess_store.load_event_sensors(event.event_id)
+        timings["load_event_sensors_s"] += perf_counter() - sensors_start
         event_sensors = event_sensors.loc[event_sensors["sensor_status"] == "included"].copy()
         if not aligned_event.empty:
             aligned_event = aligned_event.copy()
@@ -137,11 +231,13 @@ def _build_sensor_event_feature_rows(
         for sensor in event_sensors.itertuples(index=False):
             sensor_name = str(sensor.sensor_name)
             metadata = parse_sensor_name(sensor_name)
+            compute_start = perf_counter()
             waveform_stats = _compute_waveform_statistics(
                 timestamps=aligned_event.get("timestamp_utc", pd.Series(dtype="datetime64[ns, UTC]")),
                 values=aligned_event.get(sensor_name, pd.Series(dtype=float)),
                 sampling_rate_hz=sampling_rate_hz,
             )
+            timings["waveform_feature_compute_s"] += perf_counter() - compute_start
             rows.append(
                 {
                     "event_id": event.event_id,
@@ -175,29 +271,43 @@ def _build_sensor_event_feature_rows(
                     "waveform_kurtosis": waveform_stats["kurtosis"],
                 }
             )
+        progress.advance(feature_task)
+    progress.remove_task(feature_task)
+    progress.console.print(
+        "  [success]extracted[/] "
+        f"{len(rows):,} sensor-event rows from {len(retained_events.index):,} retained events"
+    )
     return rows
 
 
 def _build_modal_feature_rows(
     preprocess_store: Any,
     *,
+    retained_events: pd.DataFrame,
     settings: FeatureSettings,
+    progress: Progress,
+    timings: dict[str, float],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    retained_events = preprocess_store.iter_retained_events()
     if retained_events.empty:
+        progress.console.print("  [warning]No retained events found for modal analysis.[/]")
         return [], [], []
 
     family_status_rows: list[dict[str, Any]] = []
     peak_rows: list[dict[str, Any]] = []
     component_rows: list[dict[str, Any]] = []
 
-    for set_name, deck in (
+    modal_targets = list(
         retained_events[["set_name", "deck"]]
         .drop_duplicates()
         .sort_values(["set_name", "deck"], kind="mergesort")
         .itertuples(index=False, name=None)
-    ):
+    )
+    for index, (set_name, deck) in enumerate(modal_targets, start=1):
+        progress.console.print(
+            f"\n[stage_modal]MODAL {index}/{len(modal_targets)}[/]  [key]{set_name} {deck}[/]"
+        )
         if not settings.modal_analysis.enabled:
+            progress.console.print("  [warning]skipped[/] disabled in config")
             family_status_rows.append(
                 {
                     "set_name": set_name,
@@ -215,6 +325,30 @@ def _build_modal_feature_rows(
             (retained_events["set_name"] == set_name)
             & (retained_events["deck"] == deck)
         ].copy()
+        candidate_task = progress.add_task(
+            "  Scanning ACC_Z candidates...",
+            total=len(event_rows.index),
+        )
+        selected_event_total = (
+            len(event_rows.index)
+            if settings.modal_analysis.max_events is None
+            else min(len(event_rows.index), settings.modal_analysis.max_events)
+        )
+        load_task = progress.add_task(
+            "  Loading aligned ACC_Z events...",
+            total=max(selected_event_total, 1),
+        )
+        selected_event_count = 0
+
+        def advance_candidate() -> None:
+            progress.advance(candidate_task)
+
+        def advance_selected() -> None:
+            nonlocal selected_event_count
+            selected_event_count += 1
+            progress.advance(load_task)
+
+        collect_start = perf_counter()
         collection = collect_preprocessed_event_matrices(
             preprocess_store,
             set_name=set_name,
@@ -223,8 +357,15 @@ def _build_modal_feature_rows(
             axis=settings.modal_analysis.axis,
             min_common_events=settings.modal_analysis.min_common_events,
             max_events=settings.modal_analysis.max_events,
+            on_candidate_event=advance_candidate,
+            on_selected_event=advance_selected,
         )
+        timings["modal_collect_s"] += perf_counter() - collect_start
+        progress.remove_task(candidate_task)
+        progress.update(load_task, total=max(selected_event_count, 1), completed=selected_event_count)
+        progress.remove_task(load_task)
         if not collection.aligned_events:
+            progress.console.print(f"  [warning]skipped[/] {collection.detail}")
             family_status_rows.append(
                 {
                     "set_name": set_name,
@@ -238,6 +379,9 @@ def _build_modal_feature_rows(
             )
             continue
 
+        progress.console.print("  [accent]Running ACC_Z FDD...[/]")
+        fdd_task = progress.add_task("  Computing ACC_Z FDD summary...", total=None)
+        fdd_start = perf_counter()
         summary = run_acc_z_fdd_from_event_matrices(
             collection.aligned_events,
             channel_names=collection.channel_names,
@@ -248,8 +392,15 @@ def _build_modal_feature_rows(
             noverlap=settings.modal_analysis.noverlap,
             n_peaks=settings.modal_analysis.n_peaks,
         )
+        timings["modal_fdd_s"] += perf_counter() - fdd_start
+        progress.remove_task(fdd_task)
         peak_table = summary["peak_table"].copy()
         mode_shape_locations = summary["mode_shape_locations"].copy()
+        progress.console.print(
+            "  [success]done[/] "
+            f"{len(collection.aligned_events):,} events  "
+            f"{len(collection.channel_names):,} channels"
+        )
         family_status_rows.append(
             {
                 "set_name": set_name,

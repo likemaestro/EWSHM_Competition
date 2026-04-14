@@ -208,6 +208,14 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 - Local Python-vs-R parity validation against the original helper
 - Notebook examples that exercise the package API instead of embedding logic
 
+## Progress Ownership
+
+- Preprocess owns and prints its set/event-level inner progress directly.
+- The CLI runner owns the outer stage-level pipeline progress when `aquinas run`
+  executes multiple stages.
+- This keeps preprocess progress behavior unchanged for
+  `aquinas run preprocess` while allowing nested progress during full runs.
+
 Additional implementation notes:
 
 - Short-waveform guard for the default Butterworth filter: too-short

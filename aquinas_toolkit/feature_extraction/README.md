@@ -36,6 +36,19 @@ Deferred beyond this pass:
   timestamp-synchronized)
 - **Output:** a feature matrix (rows = events, columns = named features)
 
+## Stage Progress
+
+`run_features()` now reports stage-owned progress phases with the shared CLI console:
+
+- loading preprocess artifacts
+- extracting per-sensor features across retained events
+- per `(set, deck)` modal analysis progress for ACC_Z candidate scanning and aligned-event loading
+- ACC_Z FDD execution (or a clear `skipped` reason when requirements are not met)
+- writing `features.sqlite`
+
+This inner stage progress is displayed both when running `aquinas run features`
+and when `features` is executed inside `aquinas run` with the outer pipeline bar.
+
 ## Implemented helpers
 
 - `frequency_domain_decomposition(...)` -- compute singular-value spectra

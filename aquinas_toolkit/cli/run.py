@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from dataclasses import replace
 from pathlib import Path
+from time import perf_counter
 
 import yaml
 
 from aquinas_toolkit.cli import terminal
+from aquinas_toolkit.utils.debug_logging import RunDebugLogger
 from aquinas_toolkit.utils.run_management import (
     STAGES,
     RunContext,
@@ -76,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         help="Existing run ID to resume for features, train, or score.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print detailed timing breakdowns while still writing debug.log for every run.",
+    )
     return parser
 
 
@@ -85,7 +93,12 @@ def run() -> None:
     args = parser.parse_args(sys.argv[2:])
 
     try:
-        exit_code = run_command(stage=args.stage, name=args.name, run_id=args.run_id)
+        exit_code = run_command(
+            stage=args.stage,
+            name=args.name,
+            run_id=args.run_id,
+            verbose=args.verbose,
+        )
     except RunManagementError as exc:
         terminal.print_error(str(exc))
         sys.exit(1)
@@ -94,7 +107,13 @@ def run() -> None:
         sys.exit(exit_code)
 
 
-def run_command(stage: str | None, name: str | None, run_id: str | None) -> int:
+def run_command(
+    stage: str | None,
+    name: str | None,
+    run_id: str | None,
+    *,
+    verbose: bool = False,
+) -> int:
     """Execute the run command and return a process exit code."""
     creates_new_run = stage in {None, "preprocess"}
 
@@ -112,6 +131,14 @@ def run_command(stage: str | None, name: str | None, run_id: str | None) -> int:
         run_context = resolve_run(run_id=run_id)
         if run_id is not None:
             write_latest_pointer(run_context.results_dir, run_context.run_id)
+    run_context = replace(run_context, verbose=verbose)
+    debug_logger = RunDebugLogger(run_context.debug_log_path, verbose=verbose)
+    debug_logger.log(
+        "RUN_START",
+        run_id=run_context.run_id,
+        stage=stage or "pipeline",
+        verbose=verbose,
+    )
 
     terminal.print_run_summary(
         run_id=run_context.run_id,
@@ -130,27 +157,64 @@ def run_command(stage: str | None, name: str | None, run_id: str | None) -> int:
     else:
         stages_to_run = [stage]
 
-    for current_stage in stages_to_run:
-        try:
-            _run_stage(current_stage, run_context)
-        except StageNotImplementedError as exc:
-            _refresh_visualization_bundle(run_context)
-            _print_visualization_hint()
-            terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-            return 1
-        except RunManagementError as exc:
-            _refresh_visualization_bundle(run_context)
-            _print_visualization_hint()
-            terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-            return 1
-        except Exception as exc:  # pragma: no cover - defensive path
-            _refresh_visualization_bundle(run_context)
-            _print_visualization_hint()
-            terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
-            return 1
+    if stage is None:
+        with terminal.progress_context(transient=False) as progress:
+            pipeline_task = progress.add_task(
+                "Pipeline progress...",
+                total=len(stages_to_run),
+            )
+            for current_stage in stages_to_run:
+                progress.update(
+                    pipeline_task,
+                    description=f"Pipeline progress... ({current_stage})",
+                )
+                try:
+                    _run_stage(current_stage, run_context)
+                    progress.advance(pipeline_task)
+                except StageNotImplementedError as exc:
+                    debug_logger.exception(stage=current_stage, error=exc)
+                    _refresh_visualization_bundle(run_context)
+                    _print_visualization_hint()
+                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                    return 1
+                except RunManagementError as exc:
+                    debug_logger.exception(stage=current_stage, error=exc)
+                    _refresh_visualization_bundle(run_context)
+                    _print_visualization_hint()
+                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                    return 1
+                except Exception as exc:  # pragma: no cover - defensive path
+                    debug_logger.exception(stage=current_stage, error=exc)
+                    _refresh_visualization_bundle(run_context)
+                    _print_visualization_hint()
+                    terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                    return 1
+    else:
+        for current_stage in stages_to_run:
+            try:
+                _run_stage(current_stage, run_context)
+            except StageNotImplementedError as exc:
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
+            except RunManagementError as exc:
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
+            except Exception as exc:  # pragma: no cover - defensive path
+                debug_logger.exception(stage=current_stage, error=exc)
+                _refresh_visualization_bundle(run_context)
+                _print_visualization_hint()
+                terminal.print_stage_status("FAIL", current_stage, str(exc), stderr=True)
+                return 1
 
     _refresh_visualization_bundle(run_context)
     _print_visualization_hint()
+    debug_logger.log("RUN_DONE", run_id=run_context.run_id, stage=stage or "pipeline")
     return 0
 
 
@@ -159,16 +223,25 @@ def _run_stage(stage: str, run_context: RunContext) -> None:
     validate_stage_can_run(run_context.run_dir, stage)
     stage_dir = ensure_stage_output_dir(run_context.run_dir, stage)
     mark_stage_started(run_context.run_dir, stage)
+    debug_logger = RunDebugLogger(run_context.debug_log_path, verbose=run_context.verbose)
+    debug_logger.log("STAGE_START", stage=stage, run_id=run_context.run_id)
     terminal.print_stage_status("START", stage, f"Run {run_context.run_id}")
 
+    stage_start = perf_counter()
     try:
         _execute_stage(stage, run_context)
     except Exception as exc:
+        stage_seconds = perf_counter() - stage_start
+        debug_logger.timing(stage=stage, phase="stage_total_s", seconds=stage_seconds)
+        debug_logger.exception(stage=stage, error=exc)
         mark_stage_failed(run_context.run_dir, stage, str(exc))
         raise
 
+    stage_seconds = perf_counter() - stage_start
+    debug_logger.timing(stage=stage, phase="stage_total_s", seconds=stage_seconds)
+    debug_logger.log("STAGE_DONE", stage=stage, run_id=run_context.run_id, total_s=f"{stage_seconds:.3f}")
     mark_stage_completed(run_context.run_dir, stage)
-    terminal.print_stage_status("DONE", stage, f"Output: {stage_dir}")
+    terminal.print_stage_status("DONE", stage, f"Output: {stage_dir} (total_s={stage_seconds:.3f})")
 
 
 def _execute_stage(stage: str, run_context: RunContext) -> None:

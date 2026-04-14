@@ -3,11 +3,14 @@ import math
 import shutil
 import sqlite3
 import sys
+import warnings
+from warnings import WarningMessage
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from pandas.errors import DtypeWarning
 
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.feature_extraction import (
@@ -18,7 +21,7 @@ from aquinas_toolkit.feature_extraction import (
     summarize_fdd_mode_shapes,
     summarize_fdd_peaks,
 )
-from aquinas_toolkit.preprocessing import open_preprocess_store
+from aquinas_toolkit.preprocessing import LegacyPreprocessCsvReader, open_preprocess_store
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -341,6 +344,60 @@ def test_run_features_creates_sqlite_feature_store_and_modal_outputs(
     assert "insufficient common ACC_Z" in old_status["detail"]
 
 
+def test_run_features_prints_stage_progress_phases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features"])
+    run_mod.run()
+
+    captured = capsys.readouterr()
+    assert "Loading preprocess artifacts..." in captured.out
+    assert "Extracting sensor-event features..." in captured.out
+    assert "MODAL 1/" in captured.out
+    assert "Running ACC_Z FDD..." in captured.out
+    assert "Writing feature store..." in captured.out
+    assert "skipped" in captured.out
+    assert "Timing breakdown (features)" not in captured.out
+
+
+def test_run_features_verbose_prints_timing_breakdown_and_writes_debug_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features", "--verbose"])
+    run_mod.run()
+
+    captured = capsys.readouterr()
+    assert "Timing breakdown (features)" in captured.out
+    assert "load_aligned_event_s" in captured.out
+    assert "write_sensor_event_features_s" in captured.out
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    debug_log = tmp_path / "results" / latest["run_id"] / "debug.log"
+    log_text = debug_log.read_text(encoding="utf-8")
+    assert "event=TIMING" in log_text
+    assert "stage=features" in log_text
+    assert "phase=load_aligned_event_s" in log_text
+    assert "phase=load_event_sensors_s" in log_text
+    assert "phase=write_sensor_event_features_s" in log_text
+    assert "phase=total_stage_s" in log_text
+
+
 def test_run_acc_z_fdd_from_preprocess_store_reads_canonical_preprocess_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -419,6 +476,58 @@ def test_run_features_can_read_legacy_preprocess_csv_artifacts_temporarily(
     assert not sensor_features.empty
     assert "table_duration" in sensor_features.columns
     assert set(family_status["status"]) >= {"completed", "skipped"}
+
+
+def test_legacy_preprocess_reader_caches_sensor_records_and_avoids_dtype_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    _materialize_legacy_preprocess_artifacts(preprocess_dir)
+
+    legacy_run_id = f"{latest['run_id']}_legacy_cache"
+    legacy_run_dir = tmp_path / "results" / legacy_run_id
+    shutil.copytree(tmp_path / "results" / latest["run_id"], legacy_run_dir)
+    legacy_preprocess_dir = legacy_run_dir / "stages" / "preprocess"
+    (legacy_preprocess_dir / "preprocess.sqlite").unlink()
+    for sidecar in ("preprocess.sqlite-wal", "preprocess.sqlite-shm"):
+        sidecar_path = legacy_preprocess_dir / sidecar
+        if sidecar_path.exists():
+            sidecar_path.unlink()
+
+    read_calls: list[Path] = []
+    original_read_csv = pd.read_csv
+
+    def tracking_read_csv(*args, **kwargs):  # noqa: ANN001
+        path_arg = args[0] if args else kwargs.get("filepath_or_buffer")
+        if Path(path_arg) == legacy_preprocess_dir / "sensor_records.csv":
+            read_calls.append(Path(path_arg))
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", tracking_read_csv)
+
+    recorded_warnings: list[WarningMessage] = []
+    with LegacyPreprocessCsvReader(legacy_preprocess_dir) as reader:
+        event_ids = reader.iter_retained_events()["event_id"].tolist()
+        assert event_ids
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            first = reader.load_event_sensors(event_ids[0])
+            second = reader.load_event_sensors(event_ids[0])
+        recorded_warnings = list(recorded)
+
+    assert not first.empty
+    pd.testing.assert_frame_equal(first, second)
+    assert len(read_calls) == 1
+    assert not [warning for warning in recorded_warnings if isinstance(warning.message, DtypeWarning)]
 
 
 def _materialize_legacy_preprocess_artifacts(preprocess_dir: Path) -> None:

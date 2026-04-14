@@ -95,6 +95,7 @@ def test_run_help_mentions_name_and_run_id(
     assert "Usage: aquinas run" in captured.out
     assert "--name" in captured.out
     assert "--run-id" in captured.out
+    assert "--verbose" in captured.out
 
 
 def test_viz_help_mentions_build_and_open(
@@ -136,6 +137,10 @@ def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Running full pipeline for run" in captured.out
+    assert "Pipeline progress" in captured.out
+    assert "START preprocess Run" in captured.out
+    assert "START features Run" in captured.out
+    assert "Pipeline progress...START preprocess" not in captured.out
     assert "aquinas viz open" in captured.out
     assert "Not yet implemented" in captured.err
 
@@ -271,6 +276,24 @@ def test_run_features_uses_latest_pointer_and_run_snapshot_config(
     assert metadata["stages"]["features"]["status"] == "completed"
 
 
+def test_run_verbose_flag_is_propagated_to_stage_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    captured: dict[str, bool] = {}
+
+    def fake_execute(stage: str, run_context: run_management.RunContext) -> None:
+        captured["verbose"] = run_context.verbose
+
+    monkeypatch.setattr(run_mod, "_execute_stage", fake_execute)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess", "--verbose"])
+    run_mod.run()
+
+    assert captured["verbose"] is True
+
+
 def test_run_features_explicit_run_id_overrides_latest_and_updates_pointer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -365,6 +388,9 @@ def test_run_full_pipeline_stops_after_train_failure(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "train boom" in captured.err
+    assert "Pipeline progress... (train)" in captured.out
+    assert "Pipeline progress... (score)" not in captured.out
+    assert "START train Run" in captured.out
     assert executed_stages == ["preprocess", "features", "train"]
 
     latest = _read_json(tmp_path / "results" / "latest.json")
@@ -615,3 +641,40 @@ def test_main_dispatches_to_run(monkeypatch: pytest.MonkeyPatch) -> None:
     main()
 
     assert called is True
+
+
+def test_run_single_stage_does_not_show_pipeline_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(run_mod, "_execute_stage", lambda stage, run_context: None)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+
+    run_mod.run()
+
+    captured = capsys.readouterr()
+    assert "Pipeline progress" not in captured.out
+
+
+def test_run_writes_debug_log_even_without_verbose(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(run_mod, "_execute_stage", lambda stage, run_context: None)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = _read_json(tmp_path / "results" / "latest.json")
+    debug_log = tmp_path / "results" / latest["run_id"] / "debug.log"
+    assert debug_log.is_file()
+    log_text = debug_log.read_text(encoding="utf-8")
+    assert "event=RUN_START" in log_text
+    assert "event=STAGE_START" in log_text
+    assert "stage=preprocess" in log_text
+    assert "event=TIMING" in log_text
+    assert "phase=stage_total_s" in log_text

@@ -10,18 +10,9 @@ from typing import Any
 
 import pandas as pd
 import yaml
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
+from rich.progress import Progress
 
-from aquinas_toolkit.cli.terminal import get_console
+from aquinas_toolkit.cli.terminal import progress_context
 from aquinas_toolkit.io import AquinasReader
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent, SYNCHRO_PASSES, align_event_group
 from aquinas_toolkit.preprocessing.core import (
@@ -118,7 +109,6 @@ def run_preprocessing(run_context: RunContext) -> None:
         "written_partitions": [],
     }
 
-    console = get_console()
     set_names = list(settings.set_names)
     store_writer = PreprocessStoreWriter(
         preprocess_db,
@@ -128,17 +118,7 @@ def run_preprocessing(run_context: RunContext) -> None:
     )
 
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,
-        ) as progress:
+        with progress_context(transient=False) as progress:
             _run_preprocess_sets(
                 run_context=run_context,
                 settings=settings,
@@ -192,7 +172,7 @@ def _run_preprocess_sets(
     for index, set_name in enumerate(set_names, start=1):
         preprocess_progress["current_set"] = set_name
         _write_preprocess_progress(run_context, preprocess_progress)
-        progress.console.print(f"\n[accent]SET {index}/{len(set_names)}[/]  [key]{set_name}[/]")
+        progress.console.print(f"\n[stage_set]SET {index}/{len(set_names)}[/]  [key]{set_name}[/]")
 
         load_task = progress.add_task("  Reading sensor records...", total=None)
         reader = AquinasReader(settings.dataset_root / set_name)
@@ -337,7 +317,7 @@ def _run_preprocess_sets(
             f"[muted]{set_discarded:,} discarded[/]"
         )
         progress.console.print("  [accent]Writing preprocess store...[/]")
-        write_task = progress.add_task("  Writing preprocess store...", total=None)
+        write_task = progress.add_task("  Committing preprocess rows...", total=None)
         # TODO: overlap this per-set canonical DB commit and optional aligned export
         # with next-set preprocessing via a bounded producer-consumer writer once
         # failure handling and metadata semantics stay deterministic.
