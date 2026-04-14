@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+import numpy as np
 import pandas as pd
 
 from aquinas_toolkit.io import parse_sensor_name
-from aquinas_toolkit.preprocessing.core import collapse_sensor_records
+from aquinas_toolkit.preprocessing.core import _parse_timestamps_fast, collapse_sensor_records
 
 
 PREPROCESS_DB_NAME = "preprocess.sqlite"
@@ -161,6 +163,24 @@ class PreprocessStoreWriter:
         """Close the SQLite connection."""
         _close_sqlite_connection(self.conn)
 
+    @property
+    def waveforms_dir(self) -> Path:
+        """Directory where per-event .npy waveform files are stored."""
+        return self.path.parent / "waveforms"
+
+    def build_aligned_samples_indexes(self) -> None:
+        """No-op: waveform data is stored as numpy files, not in SQLite."""
+        pass
+
+    def write_sensors_for_set(self, sensor_records: pd.DataFrame) -> None:
+        """Populate the sensors table from sensor_records before writing event data.
+
+        Must be called before write_aligned_samples() so that FK constraints on
+        event_sensors.sensor_name are satisfied during incremental flushes.
+        """
+        with self.conn:
+            _upsert_sensors(self.conn, sensor_records, pd.DataFrame())
+
     def write_set(
         self,
         *,
@@ -168,9 +188,13 @@ class PreprocessStoreWriter:
         qc_report: pd.DataFrame,
         events: pd.DataFrame,
         event_sensors: pd.DataFrame,
-        aligned_samples: pd.DataFrame,
+        on_progress: Callable[[int], None] | None = None,
     ) -> None:
-        """Commit one set worth of preprocess outputs atomically."""
+        """Commit one set's metadata tables atomically (sensors, records, qc, events).
+
+        Aligned sample data is written separately via write_aligned_samples() during
+        the event loop so per-SET peak memory stays bounded.
+        """
         with self.conn:
             _upsert_sensors(self.conn, sensor_records, event_sensors)
             _insert_dataframe(
@@ -178,31 +202,65 @@ class PreprocessStoreWriter:
                 "sensor_records",
                 _prepare_sensor_records_frame(sensor_records),
                 SENSOR_RECORD_COLUMNS,
+                on_progress=on_progress,
             )
             _insert_dataframe(
                 self.conn,
                 "sensor_qc",
                 _prepare_simple_frame(qc_report, SENSOR_QC_COLUMNS),
                 SENSOR_QC_COLUMNS,
+                on_progress=on_progress,
             )
             _insert_dataframe(
                 self.conn,
                 "events",
                 _prepare_events_frame(events),
                 EVENT_COLUMNS,
+                on_progress=on_progress,
             )
             _insert_dataframe(
                 self.conn,
                 "event_sensors",
                 _prepare_event_sensors_frame(event_sensors),
                 EVENT_SENSOR_COLUMNS,
+                on_progress=on_progress,
             )
-            _insert_dataframe(
-                self.conn,
-                "aligned_samples",
-                _prepare_aligned_samples_frame(aligned_samples),
-                ALIGNED_SAMPLE_COLUMNS,
-            )
+
+    def write_aligned_samples(
+        self,
+        frames: list[pd.DataFrame],
+        events: pd.DataFrame | None = None,
+        event_sensors: pd.DataFrame | None = None,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> None:
+        """Write a batch of per-event waveform frames as numpy files, preceded by their event rows in SQLite.
+
+        Each frame in ``frames`` is a wide DataFrame from ``aligned_event_to_long_frame()``
+        with columns: event_id, sample_index, timestamp_utc, sensor1, sensor2, ...
+        The waveform matrix is saved as ``<event_id>.npy`` (float32, n_samples × n_sensors)
+        alongside ``<event_id>.meta.json`` (sensor_names list + timestamps list).
+
+        ``events`` and ``event_sensors`` rows are written to SQLite atomically.
+        """
+        with self.conn:
+            if events is not None and not events.empty:
+                _insert_dataframe(
+                    self.conn,
+                    "events",
+                    _prepare_events_frame(events),
+                    EVENT_COLUMNS,
+                    on_progress=on_progress,
+                )
+            if event_sensors is not None and not event_sensors.empty:
+                _insert_dataframe(
+                    self.conn,
+                    "event_sensors",
+                    _prepare_event_sensors_frame(event_sensors),
+                    EVENT_SENSOR_COLUMNS,
+                    on_progress=on_progress,
+                )
+        for frame in frames:
+            _write_waveform_npy(self.waveforms_dir, frame)
 
 
 class PreprocessStoreReader:
@@ -222,6 +280,11 @@ class PreprocessStoreReader:
 
     def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
         self.close()
+
+    @property
+    def waveforms_dir(self) -> Path:
+        """Directory where per-event .npy waveform files are stored."""
+        return self.path.parent / "waveforms"
 
     def load_stage_info(self) -> dict[str, Any]:
         """Return the stage metadata row as a plain dictionary."""
@@ -307,47 +370,29 @@ class PreprocessStoreReader:
         *,
         sensor_names: Sequence[str] | None = None,
     ) -> pd.DataFrame:
-        """Load one retained event as a wide aligned matrix."""
-        event_sensors = self.load_event_sensors(event_id)
-        included_sensors = event_sensors.loc[event_sensors["sensor_status"] == "included"].copy()
+        """Load one retained event as a wide aligned matrix from its numpy file."""
+        npy_path = self.waveforms_dir / f"{event_id}.npy"
+        meta_path = self.waveforms_dir / f"{event_id}.meta.json"
+
+        if not npy_path.is_file():
+            ordered = list(sensor_names) if sensor_names is not None else []
+            return pd.DataFrame(columns=["timestamp_utc", *ordered])
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        all_sensor_names: list[str] = meta["sensor_names"]
+        matrix = np.load(npy_path)  # (n_samples, n_sensors) float32
+
+        df = pd.DataFrame(matrix, columns=all_sensor_names)
+        df.insert(0, "timestamp_utc", pd.to_datetime(meta["timestamps_utc"], utc=True, format="ISO8601"))
+
         if sensor_names is None:
-            ordered_sensor_names = included_sensors["sensor_name"].astype(str).tolist()
-        else:
-            requested = set(sensor_names)
-            ordered_sensor_names = [
-                sensor_name
-                for sensor_name in event_sensors["sensor_name"].astype(str).tolist()
-                if sensor_name in requested
-            ]
-            for sensor_name in sensor_names:
-                if sensor_name not in ordered_sensor_names:
-                    ordered_sensor_names.append(sensor_name)
+            return df[["timestamp_utc", *all_sensor_names]].reset_index(drop=True)
 
-        query = """
-            SELECT sample_index, timestamp_utc, sensor_name, value
-            FROM aligned_samples
-            WHERE event_id = ?
-            ORDER BY sample_index, sensor_name
-        """
-        params: list[Any] = [event_id]
-        samples = pd.read_sql_query(query, self.conn, params=params)
-        if sensor_names is not None and not samples.empty:
-            samples = samples.loc[samples["sensor_name"].isin(set(sensor_names))].copy()
-
-        if samples.empty:
-            return pd.DataFrame(columns=["timestamp_utc", *ordered_sensor_names])
-
-        wide = (
-            samples.pivot(index=["sample_index", "timestamp_utc"], columns="sensor_name", values="value")
-            .reset_index()
-            .sort_values("sample_index", kind="mergesort")
-            .drop(columns=["sample_index"])
-        )
-        wide["timestamp_utc"] = pd.to_datetime(wide["timestamp_utc"], utc=True, format="mixed")
-        for sensor_name in ordered_sensor_names:
-            if sensor_name not in wide.columns:
-                wide[sensor_name] = float("nan")
-        return wide[["timestamp_utc", *ordered_sensor_names]].reset_index(drop=True)
+        ordered = list(sensor_names)
+        for sn in ordered:
+            if sn not in df.columns:
+                df[sn] = float("nan")
+        return df[["timestamp_utc", *ordered]].reset_index(drop=True)
 
     def load_aligned_samples(
         self,
@@ -357,31 +402,58 @@ class PreprocessStoreReader:
         sensor_names: Sequence[str] | None = None,
         event_ids: Sequence[str] | None = None,
     ) -> pd.DataFrame:
-        """Stream long-form aligned samples with optional event and sensor filters."""
-        query = """
-            SELECT sample.*
-            FROM aligned_samples AS sample
-            JOIN events AS event ON event.event_id = sample.event_id
-            WHERE 1=1
+        """Load long-form aligned samples with optional event and sensor filters.
+
+        Reconstructs long-form rows from per-event numpy waveform files.
+        The SQLite events table is used to resolve set/deck filters.
         """
-        params: list[Any] = []
-        if set_name is not None:
-            query += " AND event.set_name = ?"
-            params.append(set_name)
-        if deck is not None:
-            query += " AND event.deck = ?"
-            params.append(deck)
-        if sensor_names:
-            query += f" AND sample.sensor_name IN ({_placeholders(sensor_names)})"
-            params.extend(sensor_names)
-        if event_ids:
-            query += f" AND sample.event_id IN ({_placeholders(event_ids)})"
-            params.extend(event_ids)
-        query += " ORDER BY event.set_name, event.deck, sample.event_id, sample.sample_index, sample.sensor_name"
-        frame = pd.read_sql_query(query, self.conn, params=params)
-        if not frame.empty:
-            frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True, format="mixed")
-        return frame
+        events = self.list_events(set_name=set_name, deck=deck, discarded=False)
+        if event_ids is not None:
+            events = events.loc[events["event_id"].isin(set(event_ids))].copy()
+        if events.empty:
+            return pd.DataFrame(columns=ALIGNED_SAMPLE_COLUMNS)
+
+        sensor_set = set(sensor_names) if sensor_names is not None else None
+        frames: list[pd.DataFrame] = []
+
+        for _, event_row in events.iterrows():
+            eid = str(event_row["event_id"])
+            npy_path = self.waveforms_dir / f"{eid}.npy"
+            meta_path = self.waveforms_dir / f"{eid}.meta.json"
+            if not npy_path.is_file():
+                continue
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            all_sensors: list[str] = meta["sensor_names"]
+            matrix = np.load(npy_path).astype(float)  # (n_samples, n_sensors)
+            timestamps = np.array(meta["timestamps_utc"])
+
+            for col_idx, sn in enumerate(all_sensors):
+                if sensor_set is not None and sn not in sensor_set:
+                    continue
+                col_vals = matrix[:, col_idx]
+                valid_mask = ~np.isnan(col_vals)
+                valid_indices = np.where(valid_mask)[0]
+                if len(valid_indices) == 0:
+                    continue
+                frames.append(pd.DataFrame({
+                    "event_id": eid,
+                    "set_name": str(event_row["set_name"]),
+                    "deck": str(event_row["deck"]),
+                    "sensor_name": sn,
+                    "sample_index": valid_indices,
+                    "timestamp_utc": timestamps[valid_indices],
+                    "value": col_vals[valid_mask],
+                }))
+
+        if not frames:
+            return pd.DataFrame(columns=ALIGNED_SAMPLE_COLUMNS)
+
+        result = pd.concat(frames, ignore_index=True)
+        result["timestamp_utc"] = pd.to_datetime(result["timestamp_utc"], utc=True, format="ISO8601")
+        return result.sort_values(
+            ["set_name", "deck", "event_id", "sample_index", "sensor_name"],
+            kind="mergesort",
+        ).reset_index(drop=True)
 
 
 class LegacyPreprocessCsvReader:
@@ -472,8 +544,8 @@ class LegacyPreprocessCsvReader:
         matched = sensor_records.loc[sensor_records["event_id"] == event_id].copy()
         if matched.empty:
             return pd.DataFrame(columns=EVENT_SENSOR_COLUMNS)
-        matched["start_time_utc"] = pd.to_datetime(matched["start_time_utc"], utc=True, format="mixed")
-        matched["end_time_utc"] = pd.to_datetime(matched["end_time_utc"], utc=True, format="mixed")
+        matched["start_time_utc"] = _parse_timestamps_fast(matched["start_time_utc"])
+        matched["end_time_utc"] = _parse_timestamps_fast(matched["end_time_utc"])
         collapsed = collapse_sensor_records(matched)
         events = self.list_events()
         event_row = events.loc[events["event_id"] == event_id]
@@ -554,7 +626,7 @@ class LegacyPreprocessCsvReader:
         if frame.empty:
             ordered_sensors = sensor_names or event_row["active_sensors"]
             return pd.DataFrame(columns=["timestamp_utc", *ordered_sensors])
-        frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True, format="mixed")
+        frame["timestamp_utc"] = _parse_timestamps_fast(frame["timestamp_utc"])
         frame = frame.sort_values("sample_index", kind="mergesort").drop(columns=["event_id", "sample_index"])
         ordered_sensors = [
             column
@@ -615,7 +687,7 @@ class LegacyPreprocessCsvReader:
         combined = pd.concat(frames, ignore_index=True)
         if sensor_names is not None:
             combined = combined.loc[combined["sensor_name"].isin(set(sensor_names))].copy()
-        combined["timestamp_utc"] = pd.to_datetime(combined["timestamp_utc"], utc=True, format="mixed")
+        combined["timestamp_utc"] = _parse_timestamps_fast(combined["timestamp_utc"])
         return combined.sort_values(
             ["set_name", "deck", "event_id", "sample_index", "sensor_name"],
             kind="mergesort",
@@ -736,17 +808,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (event_id, sensor_name)
         );
 
-        CREATE TABLE aligned_samples (
-            event_id TEXT NOT NULL REFERENCES events(event_id),
-            set_name TEXT NOT NULL REFERENCES sets(set_name),
-            deck TEXT NOT NULL,
-            sensor_name TEXT NOT NULL REFERENCES sensors(sensor_name),
-            sample_index INTEGER NOT NULL,
-            timestamp_utc TEXT NOT NULL,
-            value REAL NOT NULL,
-            PRIMARY KEY (event_id, sensor_name, sample_index)
-        );
-
         CREATE TABLE sensor_records (
             table_row_index INTEGER NOT NULL,
             Record_UID TEXT,
@@ -801,10 +862,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             ON events(set_name, deck, discarded, start_time_utc);
         CREATE INDEX idx_event_sensors_sensor_event
             ON event_sensors(sensor_name, event_id);
-        CREATE INDEX idx_aligned_samples_event_sample_sensor
-            ON aligned_samples(event_id, sample_index, sensor_name);
-        CREATE INDEX idx_aligned_samples_sensor_event_sample
-            ON aligned_samples(sensor_name, event_id, sample_index);
         CREATE INDEX idx_sensor_records_set_sensor_start
             ON sensor_records(set_name, sensor_name, start_time_utc);
         """
@@ -888,23 +945,46 @@ def _upsert_sensors(
     )
 
 
+_INSERT_CHUNK_ROWS = 500_000
+
+
 def _insert_dataframe(
     conn: sqlite3.Connection,
     table_name: str,
     frame: pd.DataFrame,
     columns: Sequence[str],
+    on_progress: Callable[[int], None] | None = None,
 ) -> None:
     if frame.empty:
         return
     placeholders = ", ".join("?" for _ in columns)
     query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-    conn.executemany(
-        query,
-        [
-            tuple(_normalize_sql_value(row[column]) for column in columns)
-            for row in frame.to_dict("records")
-        ],
-    )
+    subset = frame[list(columns)]
+    total = len(subset)
+    for start in range(0, total, _INSERT_CHUNK_ROWS):
+        chunk = subset.iloc[start : start + _INSERT_CHUNK_ROWS]
+        # Build one Python list per column, keeping each column in its native
+        # dtype.  Forcing all columns to object (e.g. via DataFrame.where with
+        # other=None) creates ~N*cols Python objects and is catastrophically
+        # slow for large tables.  Instead we handle NaN → None only for float
+        # columns using a fast numpy masked-assignment, then call .tolist() on
+        # the typed array so numpy does the scalar conversion in C.
+        col_lists: list[list] = []
+        for col in columns:
+            arr = chunk[col].to_numpy()
+            if arr.dtype.kind == "f":
+                nan_mask = np.isnan(arr)
+                if nan_mask.any():
+                    obj: np.ndarray = arr.astype(object)
+                    obj[nan_mask] = None
+                    col_lists.append(obj.tolist())
+                else:
+                    col_lists.append(arr.tolist())
+            else:
+                col_lists.append(arr.tolist())
+        conn.executemany(query, zip(*col_lists))
+        if on_progress is not None:
+            on_progress(len(chunk))
 
 
 def _prepare_events_frame(events: pd.DataFrame) -> pd.DataFrame:
@@ -917,11 +997,10 @@ def _prepare_events_frame(events: pd.DataFrame) -> pd.DataFrame:
     frame = _prepare_simple_frame(frame, EVENT_COLUMNS).copy()
     if frame.empty:
         return frame
-    frame["active_sensor_count"] = frame["active_sensor_count"].map(_to_int)
-    frame["excluded_sensor_count"] = frame["excluded_sensor_count"].map(_to_int)
-    frame["rows_before_alignment"] = frame["rows_before_alignment"].map(_to_int)
-    frame["rows_after_alignment"] = frame["rows_after_alignment"].map(_to_int)
-    frame["discarded"] = frame["discarded"].map(lambda value: int(bool(value)))
+    for col in ("active_sensor_count", "excluded_sensor_count",
+                "rows_before_alignment", "rows_after_alignment"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce").astype(int)
+    frame["discarded"] = frame["discarded"].astype(bool).astype(int)
     return frame
 
 
@@ -929,69 +1008,50 @@ def _prepare_event_sensors_frame(event_sensors: pd.DataFrame) -> pd.DataFrame:
     frame = _prepare_simple_frame(event_sensors, EVENT_SENSOR_COLUMNS).copy()
     if frame.empty:
         return frame
-    integer_columns = [
-        "sensor_order",
-        "is_reference",
-        "start_row_1based",
-        "end_row_1based",
-    ]
-    for column in integer_columns:
-        frame[column] = frame[column].map(_to_int)
-    float_columns = [
-        "duration",
-        "temperature",
-        "start_value",
-        "end_value",
-        "diff_value",
-        "min_value",
-        "max_value",
-        "mean_value",
-        "range_value",
-    ]
-    for column in float_columns:
-        frame[column] = frame[column].map(_to_optional_float)
+    for col in ("sensor_order", "is_reference", "start_row_1based", "end_row_1based"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce").astype(int)
+    for col in ("duration", "temperature", "start_value", "end_value",
+                "diff_value", "min_value", "max_value", "mean_value", "range_value"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
     return frame
 
 
-def _prepare_aligned_samples_frame(samples: pd.DataFrame) -> pd.DataFrame:
-    frame = _prepare_simple_frame(samples, ALIGNED_SAMPLE_COLUMNS).copy()
+def _write_waveform_npy(waveforms_dir: Path, frame: pd.DataFrame) -> None:
+    """Save one wide aligned-event frame as a .npy matrix + .meta.json sidecar.
+
+    ``frame`` is the output of ``aligned_event_to_long_frame()`` with columns:
+    event_id, sample_index, timestamp_utc, sensor1, sensor2, ...
+
+    Saves:
+      <waveforms_dir>/<event_id>.npy         -- float32 matrix (n_samples x n_sensors)
+      <waveforms_dir>/<event_id>.meta.json   -- {"event_id", "sensor_names", "timestamps_utc"}
+    """
     if frame.empty:
-        return frame
-    frame["sample_index"] = frame["sample_index"].map(_to_int)
-    frame["value"] = frame["value"].map(_to_optional_float)
-    frame = frame.dropna(subset=["value"]).reset_index(drop=True)
-    return frame
+        return
+    event_id = str(frame["event_id"].iloc[0])
+    sensor_cols = [c for c in frame.columns if c not in ("event_id", "sample_index", "timestamp_utc")]
+    matrix = frame[sensor_cols].to_numpy(dtype=np.float32)
+    timestamps = frame["timestamp_utc"].tolist()
+    waveforms_dir.mkdir(parents=True, exist_ok=True)
+    np.save(waveforms_dir / f"{event_id}.npy", matrix)
+    meta = {"event_id": event_id, "sensor_names": sensor_cols, "timestamps_utc": timestamps}
+    (waveforms_dir / f"{event_id}.meta.json").write_text(
+        json.dumps(meta, default=str), encoding="utf-8"
+    )
 
 
 def _prepare_sensor_records_frame(sensor_records: pd.DataFrame) -> pd.DataFrame:
     frame = _prepare_simple_frame(sensor_records, SENSOR_RECORD_COLUMNS).copy()
     if frame.empty:
         return frame
-    frame["start_time_utc"] = frame["start_time_utc"].map(_to_timestamp_text)
-    frame["end_time_utc"] = frame["end_time_utc"].map(_to_timestamp_text)
-    integer_columns = [
-        "table_row_index",
-        "Start_Row",
-        "End_Row",
-        "sensor_order",
-        "start_row_1based",
-        "end_row_1based",
-    ]
-    for column in integer_columns:
-        frame[column] = frame[column].map(_to_int)
-    float_columns = [
-        "Duration",
-        "Start_Value",
-        "End_Value",
-        "Diff_Value",
-        "Min_Value",
-        "Max_Value",
-        "Mean_Value",
-        "Range",
-        "Temperature",
-    ]
-    for column in float_columns:
-        frame[column] = frame[column].map(_to_optional_float)
+    for col in ("start_time_utc", "end_time_utc"):
+        frame[col] = _vectorized_timestamp_text(frame[col])
+    for col in ("table_row_index", "Start_Row", "End_Row",
+                "sensor_order", "start_row_1based", "end_row_1based"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce").astype(int)
+    for col in ("Duration", "Start_Value", "End_Value", "Diff_Value",
+                "Min_Value", "Max_Value", "Mean_Value", "Range", "Temperature"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
     return frame
 
 
@@ -1033,6 +1093,16 @@ def _legacy_aligned_partition_path(stage_dir: Path, *, set_name: str, deck: str)
                 if candidate.is_file():
                     return candidate
     return None
+
+
+def _vectorized_timestamp_text(series: pd.Series) -> pd.Series:
+    """Vectorized equivalent of per-row _to_timestamp_text."""
+    ts = pd.to_datetime(series, errors="coerce", utc=True)
+    valid = ts.notna()
+    result = pd.Series(None, index=series.index, dtype=object)
+    if valid.any():
+        result[valid] = ts[valid].dt.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"
+    return result
 
 
 def _to_int(value: Any) -> int:

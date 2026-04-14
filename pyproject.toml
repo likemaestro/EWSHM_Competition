@@ -6,6 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "aquinas-toolkit"
 version = "0.1.0"
 description = "Toolkit for the EWSHM 2026 AQUINAS structural health monitoring competition"
+authors = [
+    { name = "Amir Zare Beiranvand", email = "a.zarebeiranvand@phd.poliba.it" },
+    { name = "Liv Breivik", email = "livb@kth.se" },
+    { name = "Mohsen Rezvani Alile", email = "mohsen.rezvani@polimi.it" },
+    { name = "Murat Güven", email = "murat.guven@polimi.it" },
+    { name = "Tommaso Panigati", email = "tommaso.panigati@polimi.it" },
+    { name = "Zhenkun Li", email = "zhenkun.li@polimi.it" },
+]
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
@@ -15,6 +23,7 @@ dependencies = [
     "seaborn>=0.13",
     "pyyaml>=6.0",
     "rich>=13.7",
+    "orjson>=3.9",
     "jupyter",
     "jupyterlab",
 ]

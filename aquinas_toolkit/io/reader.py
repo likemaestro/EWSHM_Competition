@@ -12,10 +12,21 @@ Migrated into aquinas_toolkit with minimal formatting changes.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+import orjson
+
 import pandas as pd
+
+
+def _parse_timestamps_cached(series: pd.Series) -> pd.Series:
+    """Parse timestamps once using the fast explicit format with fallback."""
+    try:
+        return pd.to_datetime(
+            series, utc=True, format="%Y-%m-%d %H:%M:%S.%f", errors="raise"
+        )
+    except (ValueError, TypeError):
+        return pd.to_datetime(series, utc=True, format="mixed", errors="coerce")
 
 
 def parse_sensor_name(sensor_name: str) -> dict[str, str | None]:
@@ -82,6 +93,7 @@ class AquinasReader:
 
         self.set_name = self.dataset_dir.name
         self._raw_file_cache: dict[tuple[str, str], pd.DataFrame] = {}
+        self._prepped_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def summary(self) -> pd.DataFrame:
         """Return a DataFrame summarising every sensor in this dataset folder."""
@@ -187,6 +199,38 @@ class AquinasReader:
 
         self._raw_file_cache[cache_key] = df
         return df
+
+    def load_raw_file_prepped(self, sensor_name: str, raw_filename: str) -> pd.DataFrame:
+        """Load a raw waveform file with timestamps and values pre-parsed.
+
+        Returns a cached DataFrame with the timestamp column already converted
+        to datetime64[ns, UTC] and the sensor value column already numeric.
+        This avoids re-parsing timestamps on every event slice (~240K calls
+        reduced to ~2K calls).  The returned DataFrame must NOT be mutated;
+        callers should slice then ``.copy()`` the slice.
+        """
+        cache_key = (sensor_name, raw_filename)
+        if cache_key in self._prepped_cache:
+            return self._prepped_cache[cache_key]
+
+        raw_df = self.load_raw_file(sensor_name, raw_filename)
+        prepped = raw_df.copy()
+
+        # Parse timestamp column
+        ts_col = self.match_column(prepped, ["timestamp", "Timestamp"])
+        if ts_col is not None:
+            prepped[ts_col] = _parse_timestamps_cached(prepped[ts_col])
+
+        # Convert sensor value column to numeric
+        measure_columns = [c for c in prepped.columns if c != ts_col]
+        value_col = sensor_name if sensor_name in measure_columns else (
+            measure_columns[0] if measure_columns else None
+        )
+        if value_col is not None:
+            prepped[value_col] = pd.to_numeric(prepped[value_col], errors="coerce")
+
+        self._prepped_cache[cache_key] = prepped
+        return prepped
 
     def read_record(
         self,
@@ -393,8 +437,8 @@ class AquinasReader:
 
     @staticmethod
     def _load_json_file(path: Path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, "rb") as f:
+            return orjson.loads(f.read())
 
     @staticmethod
     def _unwrap_scalar(x: object) -> object:

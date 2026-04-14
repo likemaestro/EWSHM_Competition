@@ -25,6 +25,7 @@ def filter_loaded_event_group(
     low_hz: float = 0.5,
     high_hz: float = 20.0,
     order: int = 4,
+    _precomputed_sos: np.ndarray | None = None,
 ) -> LoadedEventGroup:
     """Apply zero-phase Butterworth band-pass filter to each loaded sensor slice.
 
@@ -46,6 +47,10 @@ def filter_loaded_event_group(
         Upper cut-off frequency in Hz (must be < Nyquist).
     order:
         Filter order for the Butterworth design.
+    _precomputed_sos:
+        Pre-computed second-order sections array to avoid recomputing
+        ``butter()`` on every call.  When ``None`` the coefficients are
+        computed from the other parameters as usual.
     """
     if method not in SIGNAL_FILTER_METHODS:
         raise ValueError(
@@ -63,17 +68,18 @@ def filter_loaded_event_group(
     if low_hz >= high_hz:
         raise ValueError("low_hz must be strictly smaller than high_hz.")
 
-    sos = butter(order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos")
+    sos = _precomputed_sos if _precomputed_sos is not None else butter(
+        order, [low_hz, high_hz], btype="bandpass", fs=sampling_rate_hz, output="sos",
+    )
     min_samples = _min_samples_for_sosfiltfilt(sos)
     filtered_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
     for sensor_name, (meta, waveform) in event_group.waveforms.items():
-        filtered = waveform.copy()
-        values = pd.to_numeric(filtered[sensor_name], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        values = waveform[sensor_name].to_numpy(dtype=float, na_value=0.0, copy=True)
         if len(values) > min_samples:
-            filtered[sensor_name] = sosfiltfilt(sos, values)
-        else:
-            filtered[sensor_name] = values
-        filtered_waveforms[sensor_name] = (meta.copy(), filtered)
+            values = sosfiltfilt(sos, values)
+        filtered = waveform.copy()
+        filtered[sensor_name] = values
+        filtered_waveforms[sensor_name] = (meta, filtered)
 
     return replace(event_group, waveforms=filtered_waveforms)
 

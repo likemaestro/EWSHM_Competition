@@ -16,24 +16,21 @@ ZEROING_METHODS = {
 }
 
 
-def zero_waveform(values: pd.Series, *, method: str = "linear_endpoints") -> pd.Series:
-    """Return an organizer-style zeroed copy of one waveform series."""
+def zero_waveform(values: pd.Series, *, method: str = "linear_endpoints") -> np.ndarray:
+    """Return an organizer-style zeroed copy of one waveform series as a numpy array."""
     if method not in ZEROING_METHODS:
         raise ValueError(
             f"Unsupported zeroing method: {method}. Supported methods are {sorted(ZEROING_METHODS)}."
         )
 
-    numeric = pd.to_numeric(values, errors="coerce").astype(float)
-    if method == "none" or numeric.empty:
-        return numeric
-    if len(numeric) == 1:
-        # R's formula produces NaN (0/0) for a single sample; returning 0 is more
-        # robust and has the same semantic intent (zero-relative baseline removal).
-        return numeric - float(numeric.iloc[0])
+    arr = values.to_numpy(dtype=float)
+    if method == "none" or len(arr) == 0:
+        return arr
+    if len(arr) == 1:
+        return arr - arr[0]
 
-    values_array = numeric.to_numpy(dtype=float)
-    baseline = np.linspace(values_array[0], values_array[-1], len(values_array))
-    return pd.Series(values_array - baseline, index=numeric.index, name=numeric.name)
+    baseline = np.linspace(arr[0], arr[-1], len(arr))
+    return arr - baseline
 
 
 def zero_loaded_event_group(
@@ -46,7 +43,7 @@ def zero_loaded_event_group(
     for sensor_name, (meta, waveform) in event_group.waveforms.items():
         zeroed = waveform.copy()
         zeroed[sensor_name] = zero_waveform(zeroed[sensor_name], method=method)
-        zeroed_waveforms[sensor_name] = (meta.copy(), zeroed)
+        zeroed_waveforms[sensor_name] = (meta, zeroed)
 
     return replace(event_group, waveforms=zeroed_waveforms, zeroing_method=method)
 

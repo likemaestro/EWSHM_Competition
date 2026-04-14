@@ -16,7 +16,7 @@ Entry for **Challenge 1** of the [13th European Workshop on Structural Health Mo
 - Amir Zare Beiranvand
 - Liv Breivik
 - Mohsen Rezvani Alile
-- Murat Guven
+- Murat Güven
 - Tommaso Panigati
 - Zhenkun Li
 
@@ -61,7 +61,7 @@ EWSHM_Competition/
 │
 ├── aquinas_toolkit/          Core Python package
 │   ├── io/                   Data I/O (AquinasReader)              [implemented]
-│   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
+│   ├── cli/                  CLI commands (aquinas run/info/viz/about/version)   [implemented]
 │   ├── preprocessing/        Signal preprocessing                  [implemented]
 │   ├── feature_extraction/   Feature extraction (FDD)              [partial]
 │   ├── training/             Unsupervised anomaly models           [stub]
@@ -237,6 +237,8 @@ aquinas viz build                  # explicitly rebuild the viewer for the activ
 aquinas viz build --include-waveforms
 aquinas viz open                   # serve the viewer locally and open it in the default browser
 aquinas info                       # dataset summary
+aquinas about                      # toolkit metadata and maintainers
+aquinas --version                  # installed CLI version
 ```
 
 Each new run creates a readable UTC folder, snapshots the active config,

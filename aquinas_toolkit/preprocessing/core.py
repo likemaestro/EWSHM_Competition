@@ -113,6 +113,7 @@ def load_event_group(
 
     collapsed = collapse_sensor_records(matched)
     waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
+
     for _, row in collapsed.iterrows():
         sensor_name = str(row["sensor_name"])
         meta = row.copy()
@@ -202,8 +203,8 @@ def prepare_sensor_records(reader: AquinasReader) -> pd.DataFrame:
     records["deck"] = records["sensor_name"].map(derive_deck)
     records["sensor_order"] = records["sensor_name"].map(sensor_order_map)
     records["table_row_index"] = range(len(records))
-    records["start_time_utc"] = pd.to_datetime(records[start_time_col], utc=True, format="mixed")
-    records["end_time_utc"] = pd.to_datetime(records[end_time_col], utc=True, format="mixed")
+    records["start_time_utc"] = _parse_timestamps_fast(records[start_time_col])
+    records["end_time_utc"] = _parse_timestamps_fast(records[end_time_col])
     records["raw_file"] = records[file_col]
     records["start_row_1based"] = records[start_row_col].map(
         lambda value: reader.to_int(value, "Start_Row")
@@ -281,12 +282,14 @@ def collapse_sensor_records(records: pd.DataFrame) -> pd.DataFrame:
                 f"for sensor '{sensor_name}'."
             )
 
-        first_row = sensor_rows.iloc[0].copy()
-        first_row["start_row_1based"] = int(sensor_rows["start_row_1based"].min())
-        first_row["end_row_1based"] = int(sensor_rows["end_row_1based"].max())
-        first_row["start_time_utc"] = sensor_rows["start_time_utc"].min()
-        first_row["end_time_utc"] = sensor_rows["end_time_utc"].max()
-        first_row["raw_file"] = raw_files[0]
+        first_row = sensor_rows.iloc[0]
+        if len(sensor_rows) > 1:
+            first_row = first_row.copy()
+            first_row["start_row_1based"] = int(sensor_rows["start_row_1based"].min())
+            first_row["end_row_1based"] = int(sensor_rows["end_row_1based"].max())
+            first_row["start_time_utc"] = sensor_rows["start_time_utc"].min()
+            first_row["end_time_utc"] = sensor_rows["end_time_utc"].max()
+            first_row["raw_file"] = raw_files[0]
         collapsed_rows.append(first_row)
 
     return pd.DataFrame(collapsed_rows).reset_index(drop=True)
@@ -345,6 +348,25 @@ def _format_timestamp_token(value: Any) -> str:
     return timestamp.strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
+def _parse_timestamps_fast(
+    series: pd.Series, *, errors: str = "raise"
+) -> pd.Series:
+    """Parse timestamps using an explicit format with fallback to mixed.
+
+    Always tries the explicit format first with ``errors='raise'`` so that
+    a mismatch triggers the fallback rather than silently coercing values to
+    NaT.  The caller-specified *errors* mode is only applied in the final
+    parse so that ``errors='coerce'`` works correctly when individual values
+    are truly unparseable (as opposed to using a different but valid format).
+    """
+    try:
+        return pd.to_datetime(
+            series, utc=True, format="%Y-%m-%d %H:%M:%S.%f", errors="raise"
+        )
+    except (ValueError, TypeError):
+        return pd.to_datetime(series, utc=True, format="mixed", errors=errors)
+
+
 def _ordered_unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
@@ -378,37 +400,36 @@ def _resolve_event_records(records: pd.DataFrame, event: str | Mapping[str, Any]
 
 def _load_waveform_from_record(reader: AquinasReader, meta: pd.Series) -> pd.DataFrame:
     sensor_name = str(meta["sensor_name"])
-    raw_df = reader.load_raw_file(sensor_name, str(meta["raw_file"])).copy()
-    sliced = raw_df.iloc[int(meta["start_row_1based"]) - 1 : int(meta["end_row_1based"])].copy()
-    sliced = sliced.reset_index(drop=True)
+    raw_df = reader.load_raw_file_prepped(sensor_name, str(meta["raw_file"]))
+    start = int(meta["start_row_1based"]) - 1
+    end = int(meta["end_row_1based"])
 
-    timestamp_col = reader.match_column(sliced, ["timestamp", "Timestamp"])
+    timestamp_col = reader.match_column(raw_df, ["timestamp", "Timestamp"])
     if timestamp_col is None:
         raise KeyError(f"Raw waveform for sensor '{sensor_name}' is missing a timestamp column.")
 
-    measure_columns = [column for column in sliced.columns if column != timestamp_col]
+    measure_columns = [column for column in raw_df.columns if column != timestamp_col]
     if not measure_columns:
         raise KeyError(f"Raw waveform for sensor '{sensor_name}' does not contain sensor values.")
 
     value_col = sensor_name if sensor_name in measure_columns else measure_columns[0]
-    waveform = sliced[[timestamp_col, value_col]].copy()
-    waveform = waveform.rename(columns={timestamp_col: "timestamp", value_col: sensor_name})
-    waveform["timestamp"] = pd.to_datetime(
-        waveform["timestamp"],
-        utc=True,
-        format="mixed",
-        errors="coerce",
-    )
-    waveform[sensor_name] = pd.to_numeric(waveform[sensor_name], errors="coerce")
-    n_before = len(waveform)
-    waveform = waveform.dropna(subset=["timestamp"]).reset_index(drop=True)
-    n_dropped = n_before - len(waveform)
+
+    # Slice THEN convert — avoids copying the entire 100K+ row column
+    ts_arr = raw_df[timestamp_col].iloc[start:end].to_numpy()
+    val_arr = raw_df[value_col].iloc[start:end].to_numpy(dtype=float)
+
+    # Drop rows where timestamp parsing failed (NaT)
+    valid = ~pd.isna(ts_arr)
+    n_dropped = int((~valid).sum())
     if n_dropped:
         warnings.warn(
             f"Sensor '{sensor_name}': dropped {n_dropped} row(s) with unparseable timestamps.",
             stacklevel=2,
         )
-    return waveform
+        ts_arr = ts_arr[valid]
+        val_arr = val_arr[valid]
+
+    return pd.DataFrame({"timestamp": ts_arr, sensor_name: val_arr})
 
 
 def _empty_waveform_frame(sensor_name: str) -> pd.DataFrame:

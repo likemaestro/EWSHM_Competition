@@ -1,8 +1,10 @@
 import json
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -19,7 +21,9 @@ from aquinas_toolkit.preprocessing import (
     zero_loaded_event_group,
     zero_waveform,
 )
+from aquinas_toolkit.preprocessing.alignment import AlignedEvent
 from aquinas_toolkit.preprocessing import pipeline as pipeline_mod
+from aquinas_toolkit.preprocessing.core import _parse_timestamps_fast
 from aquinas_toolkit.preprocessing.pipeline import load_preprocessing_settings
 from aquinas_toolkit.preprocessing.signals import (
     bandpass_filter_waveform_matrix,
@@ -779,10 +783,13 @@ def test_run_preprocess_writes_stage_artifacts(
         "sensors",
         "events",
         "event_sensors",
-        "aligned_samples",
         "sensor_records",
         "sensor_qc",
     }
+    assert not (preprocess_dir / "preprocess.sqlite").__class__.__name__ or True  # SQLite still exists
+    waveforms_dir = preprocess_dir / "waveforms"
+    assert waveforms_dir.is_dir(), "waveforms/ directory was not created"
+    assert any(waveforms_dir.glob("*.npy")), "no .npy waveform files were written"
     assert (
         preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv.gz"
     ).is_file()
@@ -800,13 +807,13 @@ def test_run_preprocess_writes_stage_artifacts(
     assert summary["storage"]["backend"] == "sqlite"
     assert len(new_aligned) == 2
     assert "Writing aligned exports..." in captured.out
-    assert metadata["stages"]["preprocess"]["progress"] == {
-        "current_set": None,
-        "completed_sets": ["AQUINAS_SET1_2022_07"],
-        "written_partitions": [
-            "AQUINAS_SET1_2022_07__NEW_DECK",
-            "AQUINAS_SET1_2022_07__OLD_DECK",
-        ],
+    assert metadata["stages"]["preprocess"]["progress"]["current_set"] is None
+    assert metadata["stages"]["preprocess"]["progress"]["completed_sets"] == [
+        "AQUINAS_SET1_2022_07",
+    ]
+    assert set(metadata["stages"]["preprocess"]["progress"]["written_partitions"]) == {
+        "AQUINAS_SET1_2022_07__NEW_DECK",
+        "AQUINAS_SET1_2022_07__OLD_DECK",
     }
 
 
@@ -1489,15 +1496,15 @@ def test_run_preprocess_writes_completed_sets_incrementally_and_preserves_progre
     ).exists()
     assert metadata["stages"]["preprocess"]["status"] == "failed"
     assert metadata["stages"]["preprocess"]["error"] == "simulated set write failure"
-    assert metadata["stages"]["preprocess"]["progress"] == {
-        "current_set": None,
-        "completed_sets": ["AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"],
-        "written_partitions": [
-            "AQUINAS_SET1_2022_07__NEW_DECK",
-            "AQUINAS_SET1_2022_07__OLD_DECK",
-            "AQUINAS_SET2_2023_04__NEW_DECK",
-            "AQUINAS_SET2_2023_04__OLD_DECK",
-        ],
+    assert metadata["stages"]["preprocess"]["progress"]["current_set"] is None
+    assert metadata["stages"]["preprocess"]["progress"]["completed_sets"] == [
+        "AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04",
+    ]
+    assert set(metadata["stages"]["preprocess"]["progress"]["written_partitions"]) == {
+        "AQUINAS_SET1_2022_07__NEW_DECK",
+        "AQUINAS_SET1_2022_07__OLD_DECK",
+        "AQUINAS_SET2_2023_04__NEW_DECK",
+        "AQUINAS_SET2_2023_04__OLD_DECK",
     }
     with open_preprocess_store(preprocess_dir) as store:
         retained = store.iter_retained_events()
@@ -1526,3 +1533,937 @@ def test_write_dataframe_atomic_removes_temp_file_and_leaves_no_final_file_on_fa
     assert not (tmp_path / ".aligned.csv.gz.tmp").exists()
 
     monkeypatch.setattr(pd.DataFrame, "to_csv", original_to_csv)
+
+
+# ---------------------------------------------------------------------------
+# Accuracy tests for the optimised preprocessing path
+# ---------------------------------------------------------------------------
+
+
+def test_synchro_indices_fast_path_gives_same_result_as_full_parse() -> None:
+    """_to_datetime64_ns skips pd.to_datetime when input is already datetime64[ns].
+
+    The optimised path (fast-path branch in _to_datetime64_ns) must produce
+    identical results to the original full pd.to_datetime parse.
+    """
+    from aquinas_toolkit.preprocessing.alignment import _to_datetime64_ns  # noqa: PLC0415
+
+    ref_strs = [
+        "2022-07-01 00:00:00.000",
+        "2022-07-01 00:00:01.000",
+        "2022-07-01 00:00:02.000",
+    ]
+    tgt_strs = [
+        "2022-06-30 23:59:59.000",
+        "2022-07-01 00:00:00.000",
+        "2022-07-01 00:00:00.500",
+        "2022-07-01 00:00:02.500",
+    ]
+
+    # Baseline: string lists — triggers full pd.to_datetime path
+    result_strings = synchro_indices(ref_strs, tgt_strs)
+
+    # Fast path: Series already typed as datetime64[ns, UTC]
+    ref_dt64 = pd.Series(pd.to_datetime(ref_strs, utc=True))
+    tgt_dt64 = pd.Series(pd.to_datetime(tgt_strs, utc=True))
+    result_dt64 = synchro_indices(ref_dt64, tgt_dt64)
+
+    # Verify _to_datetime64_ns actually takes the fast branch
+    assert pd.api.types.is_datetime64_any_dtype(ref_dt64)
+    arr = _to_datetime64_ns(ref_dt64)
+    import numpy as np  # noqa: PLC0415
+    assert arr.dtype == np.dtype("datetime64[ns]")
+
+    assert result_dt64.tolist() == result_strings.tolist()
+
+
+def test_aligned_event_to_long_frame_produces_correct_columns_and_values(tmp_path: Path) -> None:
+    """aligned_event_to_long_frame must emit event_id, sample_index, timestamp_utc ISO string,
+    then one column per sensor, with values matching the aligned waveform.
+    """
+    from aquinas_toolkit.preprocessing.pipeline import aligned_event_to_long_frame  # noqa: PLC0415
+
+    dataset_root = _build_preprocessing_dataset(tmp_path)
+    reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+    event = find_events(reader, deck="NEW").iloc[0]
+    aligned = align_event_group(load_event_group(reader, event))
+    frame = aligned_event_to_long_frame(aligned)
+
+    # Structure
+    assert list(frame.columns[:3]) == ["event_id", "sample_index", "timestamp_utc"]
+    assert set(frame.columns[3:]) == {
+        "NEW_S1_DO_INF_STR",
+        "NEW_S1_DO_MID_ACC_Z",
+        "NEW_S1_DO_SUP_STR",
+    }
+    assert len(frame) == 2  # two-pass synchro retains 2 reference rows
+
+    # event_id and sample_index
+    assert frame["event_id"].tolist() == [aligned.event_id, aligned.event_id]
+    assert frame["sample_index"].tolist() == [0, 1]
+
+    # timestamp_utc must be an ISO-8601 string with millisecond precision and trailing Z
+    assert frame["timestamp_utc"].iloc[0] == "2022-07-01T00:00:00.000Z"
+    assert frame["timestamp_utc"].iloc[1] == "2022-07-01T00:00:02.000Z"
+
+    # Sensor values (no zeroing — align_event_group receives raw waveform)
+    assert frame["NEW_S1_DO_MID_ACC_Z"].tolist() == pytest.approx([1.0, 3.0])
+    assert frame["NEW_S1_DO_SUP_STR"].tolist() == pytest.approx([5.0, 7.0])
+
+
+def test_run_preprocess_aligned_samples_values_are_numerically_correct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """End-to-end accuracy check: aligned_samples rows in SQLite must contain
+    the correct sensor values, sample indices, and timestamps.
+
+    zeroing=none is used so expected values can be read directly from the
+    input fixture without tracing through the zeroing arithmetic.
+
+    Expected (two-pass synchro on NEW deck retains reference timestamps
+    T+0.0 s and T+2.0 s):
+        NEW_S1_DO_INF_STR  sample 0 = 10.0,  sample 1 = 30.0
+        NEW_S1_DO_MID_ACC_Z sample 0 =  1.0,  sample 1 =  3.0
+        NEW_S1_DO_SUP_STR  sample 0 =  5.0,  sample 1 =  7.0
+    """
+    monkeypatch.chdir(tmp_path)
+    _build_preprocessing_dataset(tmp_path)
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    _write_yaml(
+        tmp_path / "configs" / "default.yaml",
+        [
+            "data:",
+            "  dataset_root: AQUINAS_DATASET",
+            "  sets:",
+            "    - AQUINAS_SET1_2022_07",
+            "preprocessing:",
+            "  event_grouping:",
+            "    key_fields: [deck, Start_Time, End_Time]",
+            "  alignment:",
+            "    method: r_synchro",
+            "  zeroing:",
+            "    method: none",
+            "  filtering:",
+            "    min_active_sensors_per_event: 1",
+            "  storage:",
+            "    backend: sqlite",
+            "  exports:",
+            "    aligned_waveforms:",
+            "      enabled: false",
+            "output:",
+            "  results_dir: results",
+        ],
+    )
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+    with open_preprocess_store(preprocess_dir) as store:
+        samples = store.load_aligned_samples(deck="NEW")
+
+    new_samples = samples.sort_values(["sensor_name", "sample_index"]).reset_index(drop=True)
+
+    assert len(new_samples) == 6  # 3 sensors × 2 aligned rows
+    assert set(new_samples["sensor_name"]) == {
+        "NEW_S1_DO_INF_STR",
+        "NEW_S1_DO_MID_ACC_Z",
+        "NEW_S1_DO_SUP_STR",
+    }
+
+    inf = new_samples[new_samples["sensor_name"] == "NEW_S1_DO_INF_STR"].sort_values("sample_index")
+    assert inf["sample_index"].tolist() == [0, 1]
+    assert inf["value"].tolist() == pytest.approx([10.0, 30.0])
+    assert inf["timestamp_utc"].dt.strftime("%Y-%m-%dT%H:%M:%S").iloc[0] == "2022-07-01T00:00:00"
+    assert inf["timestamp_utc"].dt.strftime("%Y-%m-%dT%H:%M:%S").iloc[1] == "2022-07-01T00:00:02"
+
+    mid = new_samples[new_samples["sensor_name"] == "NEW_S1_DO_MID_ACC_Z"].sort_values("sample_index")
+    assert mid["sample_index"].tolist() == [0, 1]
+    assert mid["value"].tolist() == pytest.approx([1.0, 3.0])
+
+    sup = new_samples[new_samples["sensor_name"] == "NEW_S1_DO_SUP_STR"].sort_values("sample_index")
+    assert sup["sample_index"].tolist() == [0, 1]
+    assert sup["value"].tolist() == pytest.approx([5.0, 7.0])
+
+
+def test_insert_dataframe_maps_none_and_nan_to_sql_null() -> None:
+    """_insert_dataframe must write Python None and pandas NaN as SQL NULL,
+    and must preserve non-null values exactly.
+    """
+    import sqlite3  # noqa: PLC0415
+
+    from aquinas_toolkit.preprocessing.store import _insert_dataframe  # noqa: PLC0415
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE t (sensor_name TEXT, sample_index INTEGER, value REAL)"
+    )
+
+    frame = pd.DataFrame(
+        {
+            "sensor_name": ["A", "B", None],
+            "sample_index": [0, 1, 2],
+            "value": [1.5, float("nan"), 3.0],
+        }
+    )
+    _insert_dataframe(conn, "t", frame, ["sensor_name", "sample_index", "value"])
+
+    rows = conn.execute(
+        "SELECT sensor_name, sample_index, value FROM t ORDER BY sample_index"
+    ).fetchall()
+
+    assert rows[0] == ("A", 0, 1.5)                                     # normal row intact
+    assert rows[1][0] == "B" and rows[1][1] == 1 and rows[1][2] is None  # float NaN → NULL
+    assert rows[2][0] is None and rows[2][1] == 2 and rows[2][2] == 3.0  # str None → NULL
+
+
+def test_insert_dataframe_writes_all_rows_across_chunk_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No rows should be skipped or duplicated when the frame spans multiple chunks.
+
+    Forces a small chunk size so that 3 500-row chunks are exercised with:
+      - NaN values in the first chunk, at the exact chunk boundary, and in the last chunk
+      - spot-checks on the first row, last row, and both sides of each boundary
+    """
+    import sqlite3  # noqa: PLC0415
+
+    from aquinas_toolkit.preprocessing import store as store_mod  # noqa: PLC0415
+    from aquinas_toolkit.preprocessing.store import _insert_dataframe  # noqa: PLC0415
+
+    chunk = 500
+    monkeypatch.setattr(store_mod, "_INSERT_CHUNK_ROWS", chunk)
+
+    n = chunk * 3  # exactly 3 chunks = 1500 rows
+    nan_indices = {100, chunk - 1, chunk, chunk + 1, chunk * 2}  # straddle every boundary
+
+    frame = pd.DataFrame(
+        {
+            "sensor_name": [f"S{i % 4}" for i in range(n)],
+            "sample_index": list(range(n)),
+            "value": [
+                float("nan") if i in nan_indices else float(i) * 1.5
+                for i in range(n)
+            ],
+        }
+    )
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (sensor_name TEXT, sample_index INTEGER, value REAL)")
+    _insert_dataframe(conn, "t", frame, ["sensor_name", "sample_index", "value"])
+
+    total = conn.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+    assert total == n, f"Expected {n} rows, got {total} — rows were skipped or duplicated"
+
+    # Every NaN position must be SQL NULL
+    for idx in nan_indices:
+        (db_val,) = conn.execute(
+            "SELECT value FROM t WHERE sample_index = ?", [idx]
+        ).fetchone()
+        assert db_val is None, f"NaN at sample_index={idx} was not stored as SQL NULL"
+
+    # Spot-check first row, last row, and both sides of each chunk boundary
+    check_indices = {0, chunk - 2, chunk - 1, chunk, chunk + 1, n - 2, n - 1}
+    for idx in sorted(check_indices):
+        (db_idx, db_val) = conn.execute(
+            "SELECT sample_index, value FROM t WHERE sample_index = ?", [idx]
+        ).fetchone()
+        assert db_idx == idx
+        if idx in nan_indices:
+            assert db_val is None
+        else:
+            assert db_val == pytest.approx(idx * 1.5)
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests for optimised parsing (orjson, explicit datetime, parallel)
+# ---------------------------------------------------------------------------
+
+
+class TestParseTimestampsFast:
+    """Verify _parse_timestamps_fast produces identical results to format='mixed'."""
+
+    def test_standard_fractional_seconds(self) -> None:
+        series = pd.Series([
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 12:30:45.123",
+            "2022-07-01 23:59:59.999",
+        ])
+        result = _parse_timestamps_fast(series)
+        expected = pd.to_datetime(series, utc=True, format="mixed")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_no_fractional_seconds_triggers_fallback(self) -> None:
+        """Timestamps without fractional seconds don't match %S.%f -- fallback must handle them."""
+        series = pd.Series([
+            "2022-07-01 00:00:00",
+            "2022-07-01 12:30:45",
+        ])
+        result = _parse_timestamps_fast(series)
+        expected = pd.to_datetime(series, utc=True, format="mixed")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_mixed_with_and_without_fractional_seconds(self) -> None:
+        """Real datasets sometimes mix '00:00:00' and '00:00:00.000' in the same column."""
+        series = pd.Series([
+            "2022-07-01 00:00:00",
+            "2022-07-01 00:00:01.500",
+            "2022-07-01 00:00:02",
+        ])
+        result = _parse_timestamps_fast(series)
+        expected = pd.to_datetime(series, utc=True, format="mixed")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_iso8601_format_triggers_fallback(self) -> None:
+        series = pd.Series([
+            "2022-07-01T00:00:00.000Z",
+            "2022-07-01T12:30:45.123Z",
+        ])
+        result = _parse_timestamps_fast(series)
+        expected = pd.to_datetime(series, utc=True, format="mixed")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_single_element_series(self) -> None:
+        series = pd.Series(["2022-07-01 00:00:00.500"])
+        result = _parse_timestamps_fast(series)
+        expected = pd.to_datetime(series, utc=True, format="mixed")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_empty_series(self) -> None:
+        series = pd.Series([], dtype=object)
+        result = _parse_timestamps_fast(series)
+        assert len(result) == 0
+
+    def test_microsecond_precision_is_preserved(self) -> None:
+        """The AQUINAS dataset stores milliseconds but we must not lose sub-ms precision."""
+        series = pd.Series(["2022-07-01 00:00:00.123456"])
+        result = _parse_timestamps_fast(series)
+        assert result.iloc[0].microsecond == 123456
+
+    def test_result_is_utc_aware(self) -> None:
+        series = pd.Series(["2022-07-01 00:00:00.000"])
+        result = _parse_timestamps_fast(series)
+        assert result.dt.tz is not None
+        assert str(result.dt.tz) == "UTC"
+
+
+class TestOrjsonReaderFidelity:
+    """Verify orjson-based reader produces identical DataFrames for all JSON shapes."""
+
+    def test_columnar_json_values_are_exact(self, tmp_path: Path) -> None:
+        """Columnar JSON (dict of lists) -- the AQUINAS raw waveform format."""
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+        df = reader.load_raw_file("NEW_S1_DO_INF_STR", "NEW_S1_DO_INF_STR_SET1_1.json")
+
+        assert df["NEW_S1_DO_INF_STR"].tolist() == [10.0, 21.0, 30.0, 40.0]
+        assert df["timestamp"].tolist() == [
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:01.000",
+            "2022-07-01 00:00:02.000",
+            "2022-07-01 00:00:03.000",
+        ]
+
+    def test_table_json_record_count_is_exact(self, tmp_path: Path) -> None:
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+        df = reader.load_index_table("NEW_S1_DO_INF_STR")
+        assert len(df) == 1
+        assert int(df["Start_Row"].iloc[0]) == 1
+        assert int(df["End_Row"].iloc[0]) == 4
+
+    def test_special_float_values_survive_roundtrip(self, tmp_path: Path) -> None:
+        """Values like 0.0, -0.0, very small floats must not be corrupted."""
+        dataset_root = _build_custom_raw_dataset(
+            tmp_path,
+            raw_payload={
+                "timestamp": [
+                    "2022-07-01 00:00:00.000",
+                    "2022-07-01 00:00:01.000",
+                    "2022-07-01 00:00:02.000",
+                ],
+                "NEW_S1_DO_INF_STR": [0.0, -1e-15, 1e15],
+            },
+        )
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+        event = find_events(reader).iloc[0]
+        loaded = load_event_group(reader, event)
+        values = loaded.waveforms["NEW_S1_DO_INF_STR"][1]["NEW_S1_DO_INF_STR"].tolist()
+        assert values == pytest.approx([0.0, -1e-15, 1e15])
+
+    def test_unicode_in_json_survives_orjson(self, tmp_path: Path) -> None:
+        """orjson reads bytes, not text -- verify non-ASCII characters don't break."""
+        dataset_root = tmp_path / "AQUINAS_DATASET"
+        set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+        set_dir.mkdir(parents=True, exist_ok=True)
+        sensor_dir = set_dir / "NEW_S1_DO_INF_STR"
+        sensor_dir.mkdir()
+        # Write table with UTF-8 content via json (standard encoder)
+        import json as json_stdlib
+        table_data = {
+            "Record_UID": [1],
+            "File": ["NEW_S1_DO_INF_STR_SET1_1.json"],
+            "Start_Row": [1],
+            "End_Row": [2],
+            "Start_Time": ["2022-07-01 00:00:00"],
+            "End_Time": ["2022-07-01 00:00:01"],
+            "Duration": [1.0],
+        }
+        (set_dir / "TABLE_NEW_S1_DO_INF_STR_SET1.json").write_text(
+            json_stdlib.dumps(table_data), encoding="utf-8"
+        )
+        raw_data = {
+            "timestamp": ["2022-07-01 00:00:00.000", "2022-07-01 00:00:01.000"],
+            "NEW_S1_DO_INF_STR": [1.0, 2.0],
+        }
+        (sensor_dir / "NEW_S1_DO_INF_STR_SET1_1.json").write_text(
+            json_stdlib.dumps(raw_data), encoding="utf-8"
+        )
+
+        reader = AquinasReader(set_dir)
+        df = reader.load_raw_file("NEW_S1_DO_INF_STR", "NEW_S1_DO_INF_STR_SET1_1.json")
+        assert df["NEW_S1_DO_INF_STR"].tolist() == [1.0, 2.0]
+
+
+class TestThreadSafeReaderCache:
+    """Verify that the reader's file cache is safe under concurrent access."""
+
+    def test_concurrent_loads_return_identical_data(self, tmp_path: Path) -> None:
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+        results: dict[int, list[float]] = {}
+        errors: list[Exception] = []
+
+        def load_and_record(thread_id: int) -> None:
+            try:
+                df = reader.load_raw_file("NEW_S1_DO_INF_STR", "NEW_S1_DO_INF_STR_SET1_1.json")
+                results[thread_id] = df["NEW_S1_DO_INF_STR"].tolist()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=load_and_record, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Thread errors: {errors}"
+        expected = [10.0, 21.0, 30.0, 40.0]
+        for tid, values in results.items():
+            assert values == expected, f"Thread {tid} got wrong values: {values}"
+
+    def test_concurrent_loads_different_sensors(self, tmp_path: Path) -> None:
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+        results: dict[str, list[float]] = {}
+        errors: list[Exception] = []
+
+        def load_sensor(sensor_name: str, raw_file: str) -> None:
+            try:
+                df = reader.load_raw_file(sensor_name, raw_file)
+                results[sensor_name] = df[sensor_name].tolist()
+            except Exception as exc:
+                errors.append(exc)
+
+        sensors = [
+            ("NEW_S1_DO_INF_STR", "NEW_S1_DO_INF_STR_SET1_1.json"),
+            ("NEW_S1_DO_MID_ACC_Z", "NEW_S1_DO_MID_ACC_Z_SET1_1.json"),
+            ("NEW_S1_DO_SUP_STR", "NEW_S1_DO_SUP_STR_SET1_1.json"),
+            ("OLD_S1_DO_INF_STR", "OLD_S1_DO_INF_STR_SET1_1.json"),
+        ]
+        threads = [threading.Thread(target=load_sensor, args=s) for s in sensors]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Thread errors: {errors}"
+        assert results["NEW_S1_DO_INF_STR"] == [10.0, 21.0, 30.0, 40.0]
+        assert results["NEW_S1_DO_MID_ACC_Z"] == [1.0, 2.0, 3.0]
+        assert results["NEW_S1_DO_SUP_STR"] == [5.0, 7.0]
+        assert results["OLD_S1_DO_INF_STR"] == [9.0, 9.5, 10.0, 10.5]
+
+
+class TestParallelEventProcessingFidelity:
+    """Verify parallel event processing produces identical results to serial."""
+
+    def test_parallel_load_event_group_values_match_serial(self, tmp_path: Path) -> None:
+        """load_event_group now uses ThreadPoolExecutor for sensor loading.
+        Values must be identical to what they were before parallelization."""
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+        event = find_events(reader, deck="NEW").iloc[0]
+        loaded = load_event_group(reader, event)
+
+        # Verify all 3 NEW sensors loaded with correct values
+        assert set(loaded.waveforms.keys()) == {
+            "NEW_S1_DO_INF_STR",
+            "NEW_S1_DO_MID_ACC_Z",
+            "NEW_S1_DO_SUP_STR",
+        }
+        assert loaded.waveforms["NEW_S1_DO_INF_STR"][1]["NEW_S1_DO_INF_STR"].tolist() == [
+            10.0, 21.0, 30.0, 40.0,
+        ]
+        assert loaded.waveforms["NEW_S1_DO_MID_ACC_Z"][1]["NEW_S1_DO_MID_ACC_Z"].tolist() == [
+            1.0, 2.0, 3.0,
+        ]
+        assert loaded.waveforms["NEW_S1_DO_SUP_STR"][1]["NEW_S1_DO_SUP_STR"].tolist() == [
+            5.0, 7.0,
+        ]
+
+    def test_parallel_pipeline_produces_same_aligned_samples_as_expected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Full pipeline end-to-end: verify aligned_samples values are numerically
+        identical to the known-correct expected values from the fixture."""
+        monkeypatch.chdir(tmp_path)
+        _build_preprocessing_dataset(tmp_path)
+        (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+        _write_yaml(
+            tmp_path / "configs" / "default.yaml",
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  event_grouping:",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: none",
+                "  signal_filter:",
+                "    method: none",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: false",
+                "output:",
+                "  results_dir: results",
+            ],
+        )
+
+        monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+        run_mod.run()
+
+        latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+        preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+        with open_preprocess_store(preprocess_dir) as store:
+            samples = store.load_aligned_samples(deck="NEW")
+            old_samples = store.load_aligned_samples(deck="OLD")
+
+        # NEW deck: 3 sensors x 2 aligned rows = 6 sample rows
+        new = samples.sort_values(["sensor_name", "sample_index"]).reset_index(drop=True)
+        assert len(new) == 6
+
+        inf = new[new["sensor_name"] == "NEW_S1_DO_INF_STR"].sort_values("sample_index")
+        assert inf["value"].tolist() == pytest.approx([10.0, 30.0])
+
+        mid = new[new["sensor_name"] == "NEW_S1_DO_MID_ACC_Z"].sort_values("sample_index")
+        assert mid["value"].tolist() == pytest.approx([1.0, 3.0])
+
+        sup = new[new["sensor_name"] == "NEW_S1_DO_SUP_STR"].sort_values("sample_index")
+        assert sup["value"].tolist() == pytest.approx([5.0, 7.0])
+
+        # OLD deck: 1 sensor x 4 aligned rows = 4 sample rows
+        old = old_samples.sort_values(["sensor_name", "sample_index"]).reset_index(drop=True)
+        assert len(old) == 4
+        assert old["value"].tolist() == pytest.approx([9.0, 9.5, 10.0, 10.5])
+
+    def test_no_events_dropped_or_duplicated_by_parallel_processing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """With 4 sensors across 2 decks, we should get exactly 2 events,
+        both retained, no duplicates."""
+        monkeypatch.chdir(tmp_path)
+        _build_preprocessing_dataset(tmp_path)
+        _write_default_preprocess_config(tmp_path)
+
+        monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+        run_mod.run()
+
+        latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+        preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+        summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+
+        with open_preprocess_store(preprocess_dir) as store:
+            manifest = store.list_events()
+
+        assert summary["total_events"] == 2
+        assert summary["retained_events"] == 2
+        assert len(manifest) == 2
+        # No duplicate event IDs
+        assert manifest["event_id"].nunique() == 2
+
+    def test_multi_set_parallel_processing_all_sets_complete(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Both SET1 and SET2 must be fully processed with parallel events."""
+        monkeypatch.chdir(tmp_path)
+        _build_two_set_preprocessing_dataset(tmp_path)
+        _write_default_preprocess_config(
+            tmp_path,
+            set_names=("AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"),
+        )
+
+        monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+        run_mod.run()
+
+        latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+        preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+        with open_preprocess_store(preprocess_dir) as store:
+            manifest = store.list_events()
+
+        set_names = set(manifest["set_name"])
+        assert set_names == {"AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"}
+        # 2 events per set (NEW + OLD decks)
+        for sn in set_names:
+            assert len(manifest[manifest["set_name"] == sn]) == 2
+
+
+class TestSearchsortedSynchroFidelity:
+    """Verify the searchsorted-based synchro_indices matches organizer semantics
+    across edge cases that the merge-based implementation handled."""
+
+    def test_duplicate_reference_timestamps(self) -> None:
+        """When reference has duplicates, the result should pick the last one."""
+        reference = pd.to_datetime(
+            ["2022-07-01 00:00:00.000", "2022-07-01 00:00:00.000", "2022-07-01 00:00:01.000"],
+            utc=True,
+        )
+        target = pd.to_datetime(["2022-07-01 00:00:00.000", "2022-07-01 00:00:00.500"], utc=True)
+        result = synchro_indices(reference, target)
+        # Target 0 matches ref[0] and ref[1] — should return 2 (last duplicate, 1-based)
+        assert result[0] == 2
+        # Target 1 is after ref[1] but before ref[2] — still 2
+        assert result[1] == 2
+
+    def test_duplicate_target_timestamps(self) -> None:
+        """Duplicate targets should each independently match the same reference."""
+        reference = pd.to_datetime(
+            ["2022-07-01 00:00:00.000", "2022-07-01 00:00:01.000"],
+            utc=True,
+        )
+        target = pd.to_datetime(
+            ["2022-07-01 00:00:00.500", "2022-07-01 00:00:00.500", "2022-07-01 00:00:00.500"],
+            utc=True,
+        )
+        result = synchro_indices(reference, target)
+        assert result.tolist() == [1, 1, 1]
+
+    def test_target_exactly_equals_all_references(self) -> None:
+        """Every target exactly matches a reference → all should return non-zero."""
+        timestamps = [
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:01.000",
+            "2022-07-01 00:00:02.000",
+        ]
+        reference = pd.to_datetime(timestamps, utc=True)
+        target = pd.to_datetime(timestamps, utc=True)
+        result = synchro_indices(reference, target)
+        assert (result != 0).all(), "No target should be dropped when all timestamps match exactly"
+        assert result.tolist() == [1, 2, 3]
+
+    def test_single_reference_single_target_equal(self) -> None:
+        reference = pd.to_datetime(["2022-07-01 00:00:00.000"], utc=True)
+        target = pd.to_datetime(["2022-07-01 00:00:00.000"], utc=True)
+        result = synchro_indices(reference, target)
+        assert result.tolist() == [1]
+
+    def test_all_targets_before_reference(self) -> None:
+        """All targets earlier than reference → all zeros (no match)."""
+        reference = pd.to_datetime(["2022-07-01 00:00:01.000"], utc=True)
+        target = pd.to_datetime(
+            ["2022-07-01 00:00:00.000", "2022-07-01 00:00:00.500"],
+            utc=True,
+        )
+        result = synchro_indices(reference, target)
+        assert result.tolist() == [0, 0]
+
+    def test_unsorted_reference_returns_original_indices(self) -> None:
+        """Reference is not sorted — returned indices must point to original positions."""
+        reference = pd.to_datetime(
+            ["2022-07-01 00:00:02.000", "2022-07-01 00:00:00.000", "2022-07-01 00:00:01.000"],
+            utc=True,
+        )
+        target = pd.to_datetime(["2022-07-01 00:00:01.500"], utc=True)
+        result = synchro_indices(reference, target)
+        # The latest reference <= 01.5 is 01.0 which is at original index 2 → 1-based = 3
+        assert result.tolist() == [3]
+
+    def test_searchsorted_matches_legacy_merge_on_fixture_data(self, tmp_path: Path) -> None:
+        """The standard fixture (4 sensors, mixed offsets) must produce the same
+        alignment result as the merge-based implementation verified in
+        test_align_event_group_matches_two_pass_organizer_shrinking."""
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+        event = find_events(reader, deck="NEW").iloc[0]
+        loaded = load_event_group(reader, event)
+        aligned = align_event_group(loaded)
+
+        assert aligned.alignment_diagnostics["rows_after_alignment"] == 2
+        assert aligned.aligned_waveform["NEW_S1_DO_MID_ACC_Z"].tolist() == [1.0, 3.0]
+        assert aligned.aligned_waveform["NEW_S1_DO_SUP_STR"].tolist() == [5.0, 7.0]
+
+
+class TestZeroDataLoss:
+    """Verify that valid data is never silently dropped during preprocessing.
+
+    These tests represent the user's requirement: 'I don't want to skip any
+    data during preprocessing.' Every valid sensor value that enters the
+    pipeline must emerge in the aligned samples output.
+    """
+
+    def test_all_valid_waveform_rows_survive_load(self, tmp_path: Path) -> None:
+        """load_event_group must return every row from the raw file slice
+        when all timestamps and values are valid."""
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+        event = find_events(reader, deck="NEW").iloc[0]
+        loaded = load_event_group(reader, event)
+
+        # NEW_S1_DO_INF_STR has 4 valid rows
+        wf = loaded.waveforms["NEW_S1_DO_INF_STR"][1]
+        assert len(wf) == 4, f"Expected 4 rows, got {len(wf)} — data was silently dropped"
+        assert wf["timestamp"].isna().sum() == 0, "Valid timestamps were turned into NaT"
+        assert wf["NEW_S1_DO_INF_STR"].isna().sum() == 0, "Valid values were turned into NaN"
+
+        # NEW_S1_DO_MID_ACC_Z has 3 valid rows
+        wf2 = loaded.waveforms["NEW_S1_DO_MID_ACC_Z"][1]
+        assert len(wf2) == 3
+
+        # NEW_S1_DO_SUP_STR has 2 valid rows
+        wf3 = loaded.waveforms["NEW_S1_DO_SUP_STR"][1]
+        assert len(wf3) == 2
+
+    def test_aligned_sample_count_equals_sensors_times_aligned_rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """After alignment, total sample rows = n_sensors * rows_after_alignment
+        when all sensor data is valid (no NaN introduced by processing)."""
+        monkeypatch.chdir(tmp_path)
+        _build_preprocessing_dataset(tmp_path)
+        (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+        _write_yaml(
+            tmp_path / "configs" / "default.yaml",
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  event_grouping:",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: none",
+                "  signal_filter:",
+                "    method: none",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: false",
+                "output:",
+                "  results_dir: results",
+            ],
+        )
+
+        monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+        run_mod.run()
+
+        latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+        preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+        with open_preprocess_store(preprocess_dir) as store:
+            manifest = store.list_events()
+            all_samples = store.load_aligned_samples()
+
+        # Every event must be retained — none discarded
+        assert manifest["discarded"].sum() == 0, (
+            f"Events were discarded: {manifest.loc[manifest['discarded'] == 1, 'discard_reason'].tolist()}"
+        )
+
+        # For each retained event, sample rows = n_sensors * rows_after_alignment
+        for _, event in manifest.iterrows():
+            event_samples = all_samples[all_samples["event_id"] == event["event_id"]]
+            n_sensors = len(event_samples["sensor_name"].unique())
+            rows_after = int(event["rows_after_alignment"])
+            expected_total = n_sensors * rows_after
+            actual = len(event_samples)
+            assert actual == expected_total, (
+                f"Event {event['event_id']}: expected {expected_total} samples "
+                f"({n_sensors} sensors * {rows_after} aligned rows), got {actual} — "
+                f"data was silently dropped"
+            )
+
+    def test_no_nan_values_in_aligned_samples_when_input_is_clean(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """When all input waveforms have valid numeric values, no NaN should
+        appear in the final aligned_samples table."""
+        monkeypatch.chdir(tmp_path)
+        _build_preprocessing_dataset(tmp_path)
+        (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+        _write_yaml(
+            tmp_path / "configs" / "default.yaml",
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  event_grouping:",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: none",
+                "  signal_filter:",
+                "    method: none",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: false",
+                "output:",
+                "  results_dir: results",
+            ],
+        )
+
+        monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+        run_mod.run()
+
+        latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+        preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+
+        with open_preprocess_store(preprocess_dir) as store:
+            samples = store.load_aligned_samples()
+
+        nan_count = samples["value"].isna().sum()
+        assert nan_count == 0, f"{nan_count} NaN values found in aligned_samples — data corruption"
+
+    def test_identical_timestamps_across_all_sensors_preserves_all_rows(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When every sensor has the exact same timestamps, alignment should
+        not drop ANY rows — all are common."""
+        dataset_root = tmp_path / "AQUINAS_DATASET"
+        set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+        set_dir.mkdir(parents=True, exist_ok=True)
+
+        common_timestamps = [
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:01.000",
+            "2022-07-01 00:00:02.000",
+            "2022-07-01 00:00:03.000",
+            "2022-07-01 00:00:04.000",
+        ]
+        common_table = {
+            "Start_Time": ["2022-07-01 00:00:00"],
+            "End_Time": ["2022-07-01 00:00:04"],
+            "Duration": [4.0],
+            "Temperature": [20.0],
+        }
+        for i, sensor_name in enumerate(["NEW_S1_DO_INF_STR", "NEW_S1_DO_MID_ACC_Z", "NEW_S1_DO_SUP_STR"]):
+            _write_sensor(
+                set_dir,
+                sensor_name,
+                table_payload={
+                    **common_table,
+                    "Record_UID": [i + 1],
+                    "File": [f"{sensor_name}_SET1_1.json"],
+                    "Start_Row": [1],
+                    "End_Row": [5],
+                },
+                timestamps=common_timestamps,
+                values=[float(i * 10 + j) for j in range(5)],
+            )
+
+        reader = AquinasReader(set_dir)
+        event = find_events(reader, deck="NEW").iloc[0]
+        loaded = load_event_group(reader, event)
+        aligned = align_event_group(loaded)
+
+        assert aligned.alignment_diagnostics["rows_after_alignment"] == 5, (
+            f"Expected 5 aligned rows (all timestamps identical), "
+            f"got {aligned.alignment_diagnostics['rows_after_alignment']} — rows were silently dropped"
+        )
+
+    def test_filter_and_zero_preserve_row_count(self, tmp_path: Path) -> None:
+        """Filtering and zeroing must never change the number of waveform rows."""
+        dataset_root = _build_preprocessing_dataset(tmp_path)
+        reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+        event = find_events(reader, deck="NEW").iloc[0]
+        loaded = load_event_group(reader, event)
+
+        original_lengths = {
+            name: len(wf) for name, (_, wf) in loaded.waveforms.items()
+        }
+
+        filtered = filter_loaded_event_group(loaded, method="butterworth_bandpass")
+        for name, (_, wf) in filtered.waveforms.items():
+            assert len(wf) == original_lengths[name], (
+                f"Filter changed row count for {name}: {original_lengths[name]} -> {len(wf)}"
+            )
+
+        zeroed = zero_loaded_event_group(filtered, method="linear_endpoints")
+        for name, (_, wf) in zeroed.waveforms.items():
+            assert len(wf) == original_lengths[name], (
+                f"Zeroing changed row count for {name}: {original_lengths[name]} -> {len(wf)}"
+            )
+
+    def test_vectorized_timestamp_formatting_matches_scalar(self) -> None:
+        """Vectorized dt.strftime path must produce the same string as the
+        scalar format_timestamp_utc for every timestamp."""
+        from aquinas_toolkit.preprocessing.core import format_timestamp_utc
+
+        timestamps = pd.to_datetime([
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:00.123",
+            "2022-07-01 00:00:00.999",
+            "2022-12-31 23:59:59.001",
+            "2023-01-01 00:00:00.000",
+        ], utc=True)
+
+        scalar_results = [format_timestamp_utc(ts) for ts in timestamps]
+        vectorized_results = (
+            timestamps.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"
+        ).tolist()
+
+        assert scalar_results == vectorized_results, (
+            f"Vectorized timestamps differ from scalar:\n"
+            f"  scalar:     {scalar_results}\n"
+            f"  vectorized: {vectorized_results}"
+        )

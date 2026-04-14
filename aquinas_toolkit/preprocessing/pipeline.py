@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 from rich.progress import Progress
@@ -16,6 +17,7 @@ from aquinas_toolkit.cli.terminal import progress_context
 from aquinas_toolkit.io import AquinasReader
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent, SYNCHRO_PASSES, align_event_group
 from aquinas_toolkit.preprocessing.core import (
+    LoadedEventGroup,
     collapse_sensor_records,
     find_events,
     format_timestamp_utc,
@@ -23,8 +25,8 @@ from aquinas_toolkit.preprocessing.core import (
     prepare_sensor_records,
 )
 from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS, filter_loaded_event_group
+from scipy.signal import butter
 from aquinas_toolkit.preprocessing.store import (
-    ALIGNED_SAMPLE_COLUMNS,
     EVENT_SENSOR_COLUMNS,
     SENSOR_QC_COLUMNS as SENSOR_QC_REPORT_COLUMNS,
     SENSOR_RECORD_COLUMNS,
@@ -34,6 +36,11 @@ from aquinas_toolkit.preprocessing.store import (
 from aquinas_toolkit.preprocessing.zeroing import ZEROING_METHODS, zero_loaded_event_group
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir, write_stage_progress
 
+
+# Flush aligned sample frames to SQLite every N retained events to keep
+# per-SET peak memory bounded (~200 events × ~23K rows ≈ 4-5M rows max in RAM
+# instead of ~250M rows for a full SET).
+_ALIGNED_SAMPLE_FLUSH_EVENTS = 200
 
 EVENT_MANIFEST_COLUMNS = [
     "event_id",
@@ -185,7 +192,6 @@ def _run_preprocess_sets(
                 qc_report=pd.DataFrame(columns=SENSOR_QC_REPORT_COLUMNS),
                 events=pd.DataFrame(columns=EVENT_MANIFEST_COLUMNS),
                 event_sensors=pd.DataFrame(columns=EVENT_SENSOR_COLUMNS),
-                aligned_samples=pd.DataFrame(columns=ALIGNED_SAMPLE_COLUMNS),
             )
             _mark_set_progress_complete(
                 preprocess_progress,
@@ -200,29 +206,49 @@ def _run_preprocess_sets(
         qc_report = build_sensor_qc_report(reader, sensor_records, settings=settings, set_name=set_name)
         progress.remove_task(load_task)
 
+        # Write sensor metadata immediately so FK constraints on event_sensors
+        # (sensor_name -> sensors) are satisfied during incremental flushes.
+        store_writer.write_sensors_for_set(sensor_records)
+
         for entry in exclusion_log:
             resolved_set_name = str(entry["set_name"])
             exclusion_counts_by_set[resolved_set_name] += int(entry["record_count"])
             exclusion_counts_by_reason[str(entry["exclusion_reason"])] += int(entry["record_count"])
             applied_sensor_names_by_set[resolved_set_name].add(str(entry["sensor_name"]))
 
-        set_manifest_rows: list[dict[str, Any]] = []
-        set_event_sensor_rows: list[dict[str, Any]] = []
-        set_aligned_sample_rows: list[dict[str, Any]] = []
+        set_manifest_rows: list[dict[str, Any]] = []          # ALL events for final summary
+        set_event_sensor_rows: list[dict[str, Any]] = []       # ALL event-sensors (discarded go to write_set)
+        set_aligned_sample_frames: list[pd.DataFrame] = []
+        # Retained events and their event_sensor rows are flushed incrementally
+        # alongside aligned_samples to satisfy the FK constraint (aligned_samples
+        # references events).  Discarded events accumulate in set_manifest_rows /
+        # set_event_sensor_rows and go into write_set at the end.
+        flush_event_rows: list[dict[str, Any]] = []
+        flush_event_sensor_rows: list[dict[str, Any]] = []
         set_aligned_partitions: dict[tuple[str, str], list[pd.DataFrame]] = defaultdict(list)
 
         events = find_events(reader, records=included_sensor_records)
         event_task = progress.add_task("  Processing events", total=len(events))
         set_retained = 0
 
+        # Pre-group sensor records by event_id for O(1) lookup instead of
+        # repeated .loc[] scans over the full DataFrame.
+        sensor_records_by_event = dict(tuple(sensor_records.groupby("event_id")))
+        included_records_by_event = dict(tuple(included_sensor_records.groupby("event_id")))
+
+        # Separate fast-discard events from events that need heavy processing
+        heavy_events = []
         for _, event_row in events.iterrows():
             per_deck_total[str(event_row["deck"])] += 1
-            event_sensor_records = sensor_records.loc[
-                sensor_records["event_id"] == event_row["event_id"]
-            ].copy()
-            excluded_event_rows = event_sensor_records.loc[
-                event_sensor_records["sensor_status"] == "excluded"
-            ].copy()
+            event_id = event_row["event_id"]
+            event_sensor_records = sensor_records_by_event.get(event_id, pd.DataFrame())
+            excluded_event_rows = (
+                event_sensor_records.loc[
+                    event_sensor_records["sensor_status"] == "excluded"
+                ]
+                if not event_sensor_records.empty
+                else event_sensor_records
+            )
 
             if int(event_row["active_sensor_count"]) < settings.min_active_sensors_per_event:
                 discard_reason = "insufficient_active_sensors"
@@ -244,21 +270,39 @@ def _run_preprocess_sets(
                 progress.advance(event_task)
                 continue
 
-            loaded_event = load_event_group(reader, event_row, records=included_sensor_records)
-            filtered_event = filter_loaded_event_group(
-                loaded_event,
-                method=settings.signal_filter_method,
-                low_hz=settings.signal_filter_low_hz,
-                high_hz=settings.signal_filter_high_hz,
-                order=settings.signal_filter_order,
+            heavy_events.append((
+                event_row,
+                event_sensor_records,
+                excluded_event_rows,
+                included_records_by_event.get(event_row["event_id"], pd.DataFrame()),
+            ))
+
+        # Pre-compute filter coefficients once (shared across all events)
+        precomputed_sos = None
+        if settings.signal_filter_method == "butterworth_bandpass":
+            precomputed_sos = butter(
+                settings.signal_filter_order,
+                [settings.signal_filter_low_hz, settings.signal_filter_high_hz],
+                btype="bandpass",
+                fs=100.0,
+                output="sos",
             )
-            zeroed_event_group = zero_loaded_event_group(filtered_event, method=settings.zeroing_method)
-            aligned_event = align_event_group(zeroed_event_group, method=settings.alignment_method)
+
+        # Process heavy events serially (GIL prevents thread parallelism
+        # for the numpy/scipy-dominated inner loop).
+        for event_row, event_sensor_records, excluded_event_rows, event_included_records in heavy_events:
+            aligned_event, fused_event = _process_heavy_event(
+                reader,
+                event_row,
+                event_included_records,
+                settings,
+                precomputed_sos,
+            )
 
             rows_before_alignment = 0
-            if zeroed_event_group.waveforms:
+            if fused_event.waveforms:
                 rows_before_alignment = int(
-                    len(zeroed_event_group.waveforms[aligned_event.reference_sensor][1])
+                    len(fused_event.waveforms[aligned_event.reference_sensor][1])
                 )
             rows_after_alignment = int(aligned_event.alignment_diagnostics["rows_after_alignment"])
 
@@ -298,35 +342,73 @@ def _run_preprocess_sets(
             )
             manifest_rows.append(manifest_row)
             set_manifest_rows.append(manifest_row)
-            set_event_sensor_rows.extend(
-                _build_event_sensor_rows(
-                    event_sensor_records,
-                    reference_sensor=aligned_event.reference_sensor,
-                )
+            this_event_sensor_rows = _build_event_sensor_rows(
+                event_sensor_records,
+                reference_sensor=aligned_event.reference_sensor,
             )
-            set_aligned_sample_rows.extend(aligned_event_to_sample_rows(aligned_event))
-            set_aligned_partitions[(aligned_event.set_name, aligned_event.deck)].append(
-                aligned_event_to_long_frame(aligned_event)
-            )
+            set_event_sensor_rows.extend(this_event_sensor_rows)
+            # Track retained event rows for the incremental flush; they must be
+            # written to the events table before waveform files (for metadata consistency).
+            flush_event_rows.append(manifest_row)
+            flush_event_sensor_rows.extend(this_event_sensor_rows)
+            long_frame = aligned_event_to_long_frame(aligned_event)
+            set_aligned_sample_frames.append(long_frame)
+            set_aligned_partitions[(aligned_event.set_name, aligned_event.deck)].append(long_frame)
             progress.advance(event_task)
 
+            # Flush to SQLite periodically — avoids accumulating the entire SET
+            # (~250M rows) in memory before writing starts.
+            if len(set_aligned_sample_frames) >= _ALIGNED_SAMPLE_FLUSH_EVENTS:
+                store_writer.write_aligned_samples(
+                    set_aligned_sample_frames,
+                    events=pd.DataFrame(flush_event_rows, columns=EVENT_MANIFEST_COLUMNS),
+                    event_sensors=pd.DataFrame(flush_event_sensor_rows, columns=EVENT_SENSOR_COLUMNS),
+                )
+                set_aligned_sample_frames.clear()
+                flush_event_rows.clear()
+                flush_event_sensor_rows.clear()
+
         progress.remove_task(event_task)
+        # Flush any remaining retained events that didn't reach the threshold.
+        if set_aligned_sample_frames:
+            store_writer.write_aligned_samples(
+                set_aligned_sample_frames,
+                events=pd.DataFrame(flush_event_rows, columns=EVENT_MANIFEST_COLUMNS),
+                event_sensors=pd.DataFrame(flush_event_sensor_rows, columns=EVENT_SENSOR_COLUMNS),
+            )
+            set_aligned_sample_frames.clear()
+            flush_event_rows.clear()
+            flush_event_sensor_rows.clear()
         set_discarded = len(events) - set_retained
         progress.console.print(
             f"  [success]done[/]  [key]{set_retained:,}[/] retained  "
             f"[muted]{set_discarded:,} discarded[/]"
         )
         progress.console.print("  [accent]Writing preprocess store...[/]")
-        write_task = progress.add_task("  Committing preprocess rows...", total=None)
+        # write_set now only handles metadata and DISCARDED event rows (retained
+        # events were already written incrementally with their aligned_samples).
+        discarded_manifest_rows = [r for r in set_manifest_rows if r.get("discarded")]
+        discarded_event_ids = {r["event_id"] for r in discarded_manifest_rows}
+        discarded_event_sensor_rows = [
+            r for r in set_event_sensor_rows if r["event_id"] in discarded_event_ids
+        ]
+        metadata_rows = (
+            len(sensor_records) + len(qc_report) + len(discarded_manifest_rows)
+            + len(discarded_event_sensor_rows)
+        )
+        write_task = progress.add_task(
+            "  Committing metadata rows...",
+            total=metadata_rows,
+        )
         # TODO: overlap this per-set canonical DB commit and optional aligned export
         # with next-set preprocessing via a bounded producer-consumer writer once
         # failure handling and metadata semantics stay deterministic.
         store_writer.write_set(
             sensor_records=sensor_records,
             qc_report=qc_report,
-            events=pd.DataFrame(set_manifest_rows, columns=EVENT_MANIFEST_COLUMNS),
-            event_sensors=pd.DataFrame(set_event_sensor_rows, columns=EVENT_SENSOR_COLUMNS),
-            aligned_samples=pd.DataFrame(set_aligned_sample_rows, columns=ALIGNED_SAMPLE_COLUMNS),
+            events=pd.DataFrame(discarded_manifest_rows, columns=EVENT_MANIFEST_COLUMNS),
+            event_sensors=pd.DataFrame(discarded_event_sensor_rows, columns=EVENT_SENSOR_COLUMNS),
+            on_progress=lambda n, _t=write_task: progress.advance(_t, n),
         )
         written_partitions = _partition_labels_for_partitions(set_aligned_partitions)
         _mark_set_progress_complete(
@@ -352,7 +434,11 @@ def export_aligned_event(event: AlignedEvent, output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     export_frame = event.aligned_waveform.copy()
-    export_frame["timestamp_utc"] = export_frame["timestamp_utc"].map(format_timestamp_utc)
+    ts = export_frame["timestamp_utc"]
+    if pd.api.types.is_datetime64_any_dtype(ts):
+        export_frame["timestamp_utc"] = ts.dt.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"
+    else:
+        export_frame["timestamp_utc"] = ts.map(format_timestamp_utc)
     _write_dataframe_atomic(path, export_frame)
     return path
 
@@ -360,32 +446,77 @@ def export_aligned_event(event: AlignedEvent, output_path: str | Path) -> Path:
 def aligned_event_to_long_frame(event: AlignedEvent) -> pd.DataFrame:
     """Convert an aligned event into the stage's wide per-event export shape."""
     long_frame = event.aligned_waveform.copy()
-    long_frame["timestamp_utc"] = long_frame["timestamp_utc"].map(format_timestamp_utc)
+    # Vectorized timestamp formatting instead of per-row .map(format_timestamp_utc)
+    ts = long_frame["timestamp_utc"]
+    if pd.api.types.is_datetime64_any_dtype(ts):
+        long_frame["timestamp_utc"] = ts.dt.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"
+    else:
+        long_frame["timestamp_utc"] = long_frame["timestamp_utc"].map(format_timestamp_utc)
     long_frame.insert(0, "sample_index", range(len(long_frame)))
     long_frame.insert(0, "event_id", event.event_id)
     return long_frame
 
 
-def aligned_event_to_sample_rows(event: AlignedEvent) -> list[dict[str, Any]]:
-    """Convert an aligned event into canonical long-form sample rows."""
-    if event.aligned_waveform.empty:
-        return []
+def _process_heavy_event(
+    reader: AquinasReader,
+    event_row: pd.Series,
+    included_sensor_records: pd.DataFrame,
+    settings: PreprocessingSettings,
+    precomputed_sos: "np.ndarray | None" = None,
+) -> tuple[AlignedEvent, LoadedEventGroup]:
+    """Run load/filter/zero/align for one event.
 
-    wide = event.aligned_waveform.copy()
-    wide["timestamp_utc"] = wide["timestamp_utc"].map(format_timestamp_utc)
-    wide.insert(0, "sample_index", range(len(wide)))
-    wide.insert(0, "event_id", event.event_id)
-    melted = wide.melt(
-        id_vars=["event_id", "sample_index", "timestamp_utc"],
-        var_name="sensor_name",
-        value_name="value",
-    )
-    melted["set_name"] = event.set_name
-    melted["deck"] = event.deck
-    melted = melted.dropna(subset=["value"]).reset_index(drop=True)
-    return melted[
-        ["event_id", "set_name", "deck", "sensor_name", "sample_index", "timestamp_utc", "value"]
-    ].to_dict("records")
+    Fuses filter + zero into a single numpy pass per waveform to avoid
+    redundant DataFrame copies and pd.Series ↔ numpy conversions.
+    """
+    from scipy.signal import sosfiltfilt
+
+    from aquinas_toolkit.preprocessing.alignment import align_event_group
+    from aquinas_toolkit.preprocessing.signals import _min_samples_for_sosfiltfilt
+
+    loaded_event = load_event_group(reader, event_row, records=included_sensor_records)
+
+    # Fused filter + zero in pure numpy: one copy per waveform total
+    if settings.signal_filter_method == "butterworth_bandpass" and precomputed_sos is not None:
+        min_samples = _min_samples_for_sosfiltfilt(precomputed_sos)
+        fused_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
+        do_zero = settings.zeroing_method == "linear_endpoints"
+        for sensor_name, (meta, waveform) in loaded_event.waveforms.items():
+            values = waveform[sensor_name].to_numpy(dtype=float, copy=True)
+            np.nan_to_num(values, copy=False)
+            # Filter
+            if len(values) > min_samples:
+                values = sosfiltfilt(precomputed_sos, values)
+            # Zero (inlined to avoid pd.Series→numpy roundtrip)
+            if do_zero and len(values) > 1:
+                baseline = np.linspace(values[0], values[-1], len(values))
+                values = values - baseline
+            elif do_zero and len(values) == 1:
+                values = values - values[0]
+            w = waveform.copy()
+            w[sensor_name] = values
+            fused_waveforms[sensor_name] = (meta, w)
+
+        from dataclasses import replace as dc_replace
+
+        fused_event = dc_replace(
+            loaded_event,
+            waveforms=fused_waveforms,
+            zeroing_method=settings.zeroing_method,
+        )
+    else:
+        filtered_event = filter_loaded_event_group(
+            loaded_event,
+            method=settings.signal_filter_method,
+            low_hz=settings.signal_filter_low_hz,
+            high_hz=settings.signal_filter_high_hz,
+            order=settings.signal_filter_order,
+            _precomputed_sos=precomputed_sos,
+        )
+        fused_event = zero_loaded_event_group(filtered_event, method=settings.zeroing_method)
+
+    aligned_event = align_event_group(fused_event, method=settings.alignment_method)
+    return aligned_event, fused_event
 
 
 def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:

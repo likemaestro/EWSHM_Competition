@@ -23,7 +23,7 @@ clarity, correctness, and reproducibility over enterprise patterns.
 
 ```
 reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-[implemented]     [implemented]       [partial]            [stub]       [stub]
+[implemented]     [implemented]       [implemented]        [stub]       [stub]
 ```
 
 - **Library code** lives in `aquinas_toolkit/`. Every reusable function
@@ -71,8 +71,8 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 |---|---|---|
 | `io/` | Implemented | `AquinasReader` -- load index tables and raw waveforms |
 | `cli/` | Implemented | Run lifecycle, metadata, latest-pointer resolution, and full stage dispatch (preprocess + features wired; train and score stubs) |
-| `preprocessing/` | Implemented | Deck-aware event grouping, timestamp alignment, zeroing, and preprocess-stage artifacts |
-| `feature_extraction/` | Partial | FDD modal analysis done (pipeline.py, fdd.py, workflow.py); time-domain features pending |
+| `preprocessing/` | Implemented | Deck-aware event grouping, timestamp alignment, zeroing, bandpass filtering, SQLite storage, and preprocess-stage artifacts |
+| `feature_extraction/` | Implemented | FDD modal analysis, per-sensor waveform statistics (mean, std, RMS, min, max, peak-to-peak, energy, crest factor, zero crossing rate, skewness, kurtosis), SQLite feature store |
 | `training/` | Stub | Unsupervised anomaly/trend detection models |
 | `utils/` | Implemented | Shared utilities: plotting helpers (`plotting.py`) and run-management helpers (`run_management.py`) used by the CLI and notebooks |
 | `scoring/` | Stub | Aggregate per-sensor scores into a global health score |
@@ -83,28 +83,47 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 - Synchronize sensors using organizer `Synchro()` alignment: the first
   selected sensor is the reference, two shrinking passes narrow to the
   common timestamp window; no interpolation in v1.
+- Alignment uses `np.searchsorted` for O(n log n) synchro index
+  computation and works on numpy arrays internally to avoid DataFrame
+  overhead in the inner loop.
 - Keep zeroing configurable; the current default is the organizer-shared
   endpoint-line subtraction (`linear_endpoints`).
+- Signal filtering is configurable via `signal_filter.method`:
+  `butterworth_bandpass` (default, 0.5–20 Hz) or `none`.
 - Read preprocessing behavior from the selected run's snapshotted
   `config.yaml`, not from hardcoded workspace assumptions.
 - Keep preprocess logic in `aquinas_toolkit/preprocessing/`; notebooks
   should only consume the package API.
-- `export.format` is active and supports `csv.gz` (default) and `csv`.
+- **Primary storage is SQLite** (`preprocess.sqlite`), written via
+  `PreprocessStoreWriter`. CSV exports are an optional secondary output
+  controlled by `exports.aligned_waveforms.enabled`.
+- `export.format` supports `csv.gz` (default) and `csv` for optional CSV
+  exports.
 
 ## Preprocessing public API
 
 ```python
 from aquinas_toolkit.preprocessing import (
     AlignedEvent,
+    LegacyPreprocessCsvReader,
     LoadedEventGroup,
     OrganizerQueryResult,
+    PreprocessStoreReader,
+    SIGNAL_FILTER_METHODS,
     align_event_group,
+    bandpass_filter_waveform_matrix,
     export_aligned_event,
+    filter_loaded_event_group,
+    filter_records_by_min_duration,
+    find_common_sensor_events,
     find_events,
+    load_common_event_waveform_matrix,
     load_event_group,
     load_timestamp_query_frames,
+    open_preprocess_store,
     run_preprocessing,
     run_organizer_query,
+    summarize_min_duration_filter,
     synchro_indices,
     zero_loaded_event_group,
     zero_waveform,
@@ -121,11 +140,21 @@ from aquinas_toolkit.preprocessing import (
 | `synchro_indices()` | function | Low-level helper: compute the shared row indices from one synchronization pass |
 | `zero_loaded_event_group()` | function | Apply baseline removal to each raw sensor slice before alignment |
 | `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
+| `filter_loaded_event_group()` | function | Apply signal filtering (e.g. bandpass) to each sensor in a loaded event group |
+| `bandpass_filter_waveform_matrix()` | function | Apply bandpass filter to a multichannel waveform DataFrame or ndarray |
+| `filter_records_by_min_duration()` | function | Filter sensor records by minimum event duration |
+| `find_common_sensor_events()` | function | Find events present in every selected sensor after duration filtering |
+| `load_common_event_waveform_matrix()` | function | Load one aligned multichannel event matrix |
+| `summarize_min_duration_filter()` | function | Summarize the effect of a minimum duration filter |
 | `export_aligned_event()` | function | Export one aligned event as a CSV or CSV.GZ artifact |
+| `open_preprocess_store()` | function | Open a preprocess store (SQLite or legacy CSV) as a context manager |
 | `run_preprocessing()` | function | Execute the full preprocess stage for a snapped pipeline run |
 | `AlignedEvent` | dataclass | Output of `align_event_group()` |
 | `LoadedEventGroup` | dataclass | Output of `load_event_group()` |
 | `OrganizerQueryResult` | dataclass | Output of `run_organizer_query()` |
+| `PreprocessStoreReader` | class | Read-only accessor for `preprocess.sqlite` |
+| `LegacyPreprocessCsvReader` | class | Fallback reader for old CSV-only preprocess artifacts |
+| `SIGNAL_FILTER_METHODS` | set | Supported signal filter methods: `{"none", "butterworth_bandpass"}` |
 
 ## Damaged sensor policy
 
@@ -169,15 +198,32 @@ Each sensor's raw data is stored in numbered sequential batch files named
 between 2 and 226 index-table records. Without caching, the same file would
 be read and re-parsed from JSON once per event that references it.
 
-`AquinasReader.load_raw_file()` caches parsed DataFrames in memory, keyed on
-`(sensor_name, raw_filename)`. Do not call `_load_json_file` directly; always
-go through `load_raw_file`.
+`AquinasReader` uses **orjson** for JSON loading (`_load_json_file` reads
+bytes and calls `orjson.loads()`), which is significantly faster than
+stdlib `json`.
 
-- The cache is scoped to the reader instance. `run_preprocessing()` creates a
-  new `AquinasReader` per SET, so memory is released between sets.
+There are two caching layers, both scoped to the reader instance:
+
+1. **`load_raw_file()`** -- caches the parsed DataFrame in
+   `self._raw_file_cache`, keyed on `(sensor_name, raw_filename)`.
+2. **`load_raw_file_prepped()`** -- an additional cache in
+   `self._prepped_cache` that pre-parses timestamps to
+   `datetime64[ns, UTC]` and converts sensor values to numeric. This
+   avoids repeated timestamp parsing across event slices (~240K calls
+   reduced to ~2K calls).
+
+Do not call `_load_json_file` directly; always go through `load_raw_file`
+or `load_raw_file_prepped`.
+
+- `run_preprocessing()` creates a new `AquinasReader` per SET, so memory
+  is released between sets.
 - Any caller that needs to modify the returned DataFrame must call `.copy()`
-  first. All existing internal callers (`_load_waveform_from_record`,
-  `_load_waveform_slice`, `read_record`) already do this.
+  first, or slice first then copy (`.iloc[start:end].to_numpy()`).
+  All existing internal callers already do this.
+- **Critical**: when slicing cached DataFrames, always slice first then
+  convert (`.iloc[start:end].to_numpy()`), never convert then slice
+  (`.to_numpy()[start:end]`). The latter copies the entire 100K+ row
+  column before slicing, causing severe performance regression.
 
 ## Progress reporting
 
@@ -248,8 +294,26 @@ Progress output is suppressed in pytest because stdout is not a terminal.
   clean so the option stays open. Organizer methodology reference:
   DOI `10.1007/978-3-031-96106-9_22` (EVACES 2025 Volume 2).
 - **Expected bridge frequencies** -- typically 2-10 Hz for this
-  structure, which justifies the simple non-interpolating synchronization
-  strategy in v1.
+  structure, which justifies the 0.5-20 Hz default bandpass and the
+  simple non-interpolating synchronization strategy in v1.
+
+## Performance notes
+
+- **Preprocessing throughput**: ~8.7 events/sec on a standard office
+  machine (~16 min for 10,738 events across 5 SETs).
+- **Threading**: Python's GIL prevents CPU parallelism for numpy/scipy
+  workloads. The preprocessing pipeline uses serial event processing.
+  `ThreadPoolExecutor` was tried and removed -- it provides zero speedup
+  for CPU-bound numpy/scipy work.
+- **Key optimizations**: `np.searchsorted`-based synchro alignment,
+  numpy-internal alignment loop (no DataFrame overhead), pre-parsed
+  timestamp/numeric caching in `load_raw_file_prepped`, vectorized
+  store preparation, pre-computed Butterworth SOS coefficients shared
+  across events.
+- **Data integrity**: 14 dedicated edge-case tests
+  (`TestSearchsortedSynchroFidelity`, `TestZeroDataLoss`) verify that
+  no valid data is silently dropped through the load-filter-zero-align-sample
+  pipeline.
 
 ## Attribution
 

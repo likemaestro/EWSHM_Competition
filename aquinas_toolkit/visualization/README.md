@@ -235,18 +235,5 @@ multiplying by `45.0` (the `meters_per_normalized_unit` field in
 
 ### Regenerating artifacts after code changes
 
-If you modify `layout.py` (sensor positions, geometry constants) you need
-to regenerate the JSON artifacts for existing result bundles. A helper
-script is provided:
-
-```bash
-python scripts/regen_viewer_artifacts.py
-```
-
-This reads the sensor names from each existing `sensor_layout.json`,
-re-runs `build_sensor_layout()` and `build_bridge_geometry()`, writes
-the updated JSON files, and copies the latest `viewer.js`, `viewer.css`,
-and `index.html` into every result folder under `results/`.
-
-For new runs, simply use `aquinas viz build` which always runs the full
-export from scratch.
+If you modify `layout.py` (sensor positions, geometry constants), re-run
+`aquinas viz build` which always runs the full export from scratch.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -46,7 +47,6 @@ CLI_THEME = Theme(
 )
 
 _ACTIVE_PROGRESS: ContextVar[Progress | None] = ContextVar("_ACTIVE_PROGRESS", default=None)
-
 
 class CLIView:
     """Simple wrapper that lets tests assert on the underlying plain text."""
@@ -153,6 +153,16 @@ def print_viz_help() -> None:
     get_console().print(render_viz_help())
 
 
+def print_version_text(version_text: str) -> None:
+    """Render the CLI version line."""
+    get_console().print(f"aquinas {version_text}")
+
+
+def print_about(*, version_text: str) -> None:
+    """Render toolkit metadata suitable for ``--about``."""
+    get_console().print(render_about(version_text=version_text))
+
+
 def print_error(message: str) -> None:
     """Render a styled error message to stderr."""
     get_console(stderr=True).print(_status_text("ERROR", None, message, "error"))
@@ -209,6 +219,18 @@ def print_info_table(rows: list[dict[str, Any]]) -> None:
     get_console().print(render_info_table(rows))
 
 
+def print_typo_hint(*, command_name: str, suggested_command: str) -> None:
+    """Render a playful typo hint for near-miss top-level commands."""
+    get_console().print(
+        render_typo_hint(command_name=command_name, suggested_command=suggested_command)
+    )
+
+
+def print_compact_command_hint() -> None:
+    """Render a short command summary after typo suggestions."""
+    get_console().print(render_compact_command_hint())
+
+
 def print_viz_summary(
     *,
     run_id: str,
@@ -242,12 +264,16 @@ def render_top_level_help() -> CLIView:
     commands.add_row("run [stage]", "Run the full pipeline or a single stage.")
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
     commands.add_row("viz <subcommand>", "Build or open the offline bridge viewer bundle.")
+    commands.add_row("about / --about", "Show toolkit metadata and maintainers.")
+    commands.add_row("version / --version", "Show installed CLI version.")
     commands.add_row("help", "Show this usage message.")
 
     notes = _notes_table(
         [
             ("Stages", "preprocess, features, train, score"),
             ("Viewer", "Use `aquinas viz build` to package an offline visualization."),
+            ("About", "Use `aquinas --about` to show toolkit metadata."),
+            ("Version", "Use `aquinas --version` to show the installed version."),
             ("--name", "Use only when creating a new run."),
             ("--run-id", "Resume features, train, or score from an existing run."),
         ]
@@ -259,10 +285,14 @@ def render_top_level_help() -> CLIView:
         "  run [stage]   Run the analysis pipeline (all stages, or a specific one).\n"
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
         "  viz <subcommand>  Build or open the offline bridge viewer bundle.\n"
+        "  about         Show toolkit metadata and maintainers.\n"
+        "  version       Show installed CLI version.\n"
         "  help          Show this usage message.\n"
         "Notes:\n"
         "  Stages: preprocess, features, train, score\n"
         "  Viewer: Use `aquinas viz build` to package an offline visualization.\n"
+        "  About: Use `aquinas --about` to show toolkit metadata.\n"
+        "  Version: Use `aquinas --version` to show the installed version.\n"
         "  --name: Use only when creating a new run.\n"
         "  --run-id: Resume features, train, or score from an existing run."
     )
@@ -496,6 +526,34 @@ def render_info_table(rows: list[dict[str, Any]]) -> CLIView:
     return CLIView(table, "\n".join(plain_lines))
 
 
+def render_typo_hint(*, command_name: str, suggested_command: str) -> CLIView:
+    """Build a compact typo-joke view for near-miss commands."""
+    joke = _pick_typo_joke()
+    suggestion = f"Did you mean `{suggested_command}`?"
+    message = Group(
+        Text(joke, style="warning"),
+        Text(suggestion, style="muted"),
+    )
+    plain_text = f"{joke}\n{suggestion}"
+    return CLIView(
+        Panel(message, title=f"Close Enough: {command_name}", border_style="warning", box=box.ROUNDED),
+        plain_text,
+    )
+
+
+def render_compact_command_hint() -> CLIView:
+    """Build a compact fallback hint for typo-triggered unknown commands."""
+    lines = Group(
+        Text("Available commands: run, info, viz, about, version, help", style="key"),
+        Text("Use `aquinas --help` for full usage.", style="muted"),
+    )
+    plain_text = (
+        "Available commands: run, info, viz, about, version, help\n"
+        "Use `aquinas --help` for full usage."
+    )
+    return CLIView(lines, plain_text)
+
+
 def render_viz_summary(
     *,
     run_id: str,
@@ -520,6 +578,50 @@ def render_viz_summary(
     )
     return CLIView(
         Panel(details, title="Visualization Bundle", border_style="accent", box=box.ROUNDED),
+        plain_text,
+    )
+
+
+def render_about(*, version_text: str) -> CLIView:
+    """Build the ``aquinas --about`` view."""
+    maintainer_lines = Group(
+        Text("Amir Zare Beiranvand"),
+        Text("Liv Breivik"),
+        Text("Mohsen Rezvani Alile"),
+        Text("Murat Güven"),
+        Text("Tommaso Panigati"),
+        Text("Zhenkun Li"),
+    )
+
+    details = _detail_lines(
+        [
+            ("Name", "AQUINAS Toolkit"),
+            ("Version", version_text),
+            (
+                "Purpose",
+                "Unsupervised, data-driven structural health scoring for EWSHM 2026.",
+            ),
+        ]
+    )
+    details = Group(
+        details,
+        Text("Maintainers:", style="key"),
+        maintainer_lines,
+    )
+    plain_text = (
+        "Toolkit: AQUINAS Toolkit\n"
+        f"Version: {version_text}\n"
+        "Purpose: Unsupervised, data-driven structural health scoring for EWSHM 2026.\n"
+        "Maintainers:\n"
+        "  - Amir Zare Beiranvand\n"
+        "  - Liv Breivik\n"
+        "  - Mohsen Rezvani Alile\n"
+        "  - Murat Güven\n"
+        "  - Tommaso Panigati\n"
+        "  - Zhenkun Li"
+    )
+    return CLIView(
+        Panel(details, title="AQUINAS About", border_style="accent", box=box.ROUNDED),
         plain_text,
     )
 
@@ -555,3 +657,41 @@ def _status_text(prefix: str, label: str | None, message: str, style: str) -> Te
     text.append(" ")
     text.append(message)
     return text
+
+
+def _pick_typo_joke() -> str:
+    """Pick a global typo joke while avoiding immediate repeats."""
+    global _LAST_TYPO_JOKE
+
+    if len(_TYPO_JOKES) == 1:
+        joke = _TYPO_JOKES[0]
+        _LAST_TYPO_JOKE = joke
+        return joke
+
+    available = [joke for joke in _TYPO_JOKES if joke != _LAST_TYPO_JOKE]
+    joke = _TYPO_RANDOM.choice(available or list(_TYPO_JOKES))
+    _LAST_TYPO_JOKE = joke
+    return joke
+
+
+_TYPO_RANDOM = random.SystemRandom()
+_LAST_TYPO_JOKE: str | None = None
+
+_TYPO_JOKES: tuple[str, ...] = (
+    "Identity theft is not a joke, Jim. Millions of commands suffer every year.",
+    "Bears. Beets. Broken command.",
+    "Did I stutter?",
+    "I am not superstitious, but I am a little stitious about that typo.",
+    "Well, well, well, how the turntables.",
+    "No, God, please no.",
+    "Dwight, you ignorant typo.",
+    "That is not correct. That's what she said.",
+    "Sometimes I'll start a command and I don't even know where it's going.",
+    "Question. What kind of bear is best? Wrong question.",
+    "Explain it to me like I'm five.",
+    "I declare command bankruptcy.",
+    "The worst thing about command prison was the dementors.",
+    "Today, typing is the worst.",
+    "Whenever I'm about to type something wrong, I think, 'Would an idiot do that?'",
+    "You have no idea how high I can typo.",
+)

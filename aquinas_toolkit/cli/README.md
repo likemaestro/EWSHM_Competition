@@ -18,6 +18,8 @@ script in `pyproject.toml`.
 | `aquinas info` | Show dataset summary (sensors, events, date ranges) |
 | `aquinas viz build [--run-id ID]` | Explicitly rebuild the offline visualization bundle for a run |
 | `aquinas viz open [--run-id ID] [--host HOST] [--port PORT]` | Serve the visualization bundle over local HTTP and open it in the default browser |
+| `aquinas --about` / `aquinas about` | Show toolkit metadata and maintainers |
+| `aquinas --version` / `aquinas version` | Show installed CLI version |
 
 ## Run storage
 

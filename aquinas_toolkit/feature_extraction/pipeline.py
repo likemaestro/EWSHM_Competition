@@ -127,7 +127,14 @@ def run_features(run_context: RunContext) -> None:
                 counts["mode_shape_rows_written"] = len(component_rows)
 
                 progress.console.print("  [accent]Writing feature store...[/]")
-                write_task = progress.add_task("  Persisting features.sqlite...", total=None)
+                total_feature_rows = (
+                    len(sensor_feature_rows) + len(family_status_rows)
+                    + len(peak_rows) + len(component_rows)
+                )
+                write_task = progress.add_task(
+                    "  Persisting features.sqlite...",
+                    total=total_feature_rows,
+                )
                 try:
                     write_start = perf_counter()
                     writer.write_sensor_event_features(sensor_feature_rows)
@@ -225,7 +232,7 @@ def _build_sensor_event_feature_rows(
             aligned_event["timestamp_utc"] = pd.to_datetime(
                 aligned_event["timestamp_utc"],
                 utc=True,
-                format="mixed",
+                format="ISO8601",
             )
 
         for sensor in event_sensors.itertuples(index=False):
@@ -470,7 +477,7 @@ def _compute_waveform_statistics(
         valid_timestamps = pd.to_datetime(
             timestamps.loc[valid_mask].reset_index(drop=True),
             utc=True,
-            format="mixed",
+            format="ISO8601",
         )
 
     sample_count = int(len(numeric))

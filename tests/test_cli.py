@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.cli.main import main
 from aquinas_toolkit.utils import run_management
@@ -79,6 +80,140 @@ def test_main_fails_for_unknown_subcommand(
     captured = capsys.readouterr()
     assert "Unknown command: unknown" in captured.err
     assert "AQUINAS CLI" in captured.out
+
+
+def test_main_typo_hint_for_info_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "infp"])
+    monkeypatch.setattr(
+        terminal,
+        "_pick_typo_joke",
+        lambda: "Identity theft is not a joke, Jim. Millions of commands suffer every year.",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Identity theft is not a joke, Jim. Millions of commands suffer every year." in captured.out
+    assert "Did you mean `info`?" in captured.out
+    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Use `aquinas --help` for full usage." in captured.out
+    assert "AQUINAS CLI" not in captured.out
+    assert "Unknown command: infp" in captured.err
+
+
+def test_main_typo_hint_for_inserted_info_character(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "infof"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "Did I stutter?")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `info`?" in captured.out
+    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "AQUINAS CLI" not in captured.out
+    assert "Unknown command: infof" in captured.err
+
+
+def test_main_typo_hint_for_viz_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "vzi"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "I declare command bankruptcy.")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `viz`?" in captured.out
+    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Unknown command: vzi" in captured.err
+
+
+def test_main_typo_hint_for_run_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "rn"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "That is not correct. That's what she said.")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `run`?" in captured.out
+    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Unknown command: rn" in captured.err
+
+
+def test_main_shows_about_for_about_alias(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "about"])
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "AQUINAS About" in captured.out
+    assert "Toolkit" in captured.out
+    assert "Murat Güven" in captured.out
+    assert captured.err == ""
+
+
+def test_main_shows_version_for_version_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "--version"])
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "aquinas 0.1.0" in captured.out
+    assert captured.err == ""
+
+
+def test_main_does_not_hint_for_distant_unknown_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["aquinas", "spreadsheets"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean" not in captured.out
+    assert "AQUINAS CLI" in captured.out
+    assert "Unknown command: spreadsheets" in captured.err
+
+
+def test_pick_typo_joke_avoids_immediate_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(terminal, "_TYPO_JOKES", ("first", "second", "third"))
+    monkeypatch.setattr(terminal, "_LAST_TYPO_JOKE", "first")
+    monkeypatch.setattr(terminal._TYPO_RANDOM, "choice", lambda options: options[0])
+
+    joke = terminal._pick_typo_joke()
+
+    assert joke == "second"
+    assert terminal._LAST_TYPO_JOKE == "second"
+
+
+def test_pick_typo_joke_allows_single_entry_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(terminal, "_TYPO_JOKES", ("only",))
+    monkeypatch.setattr(terminal, "_LAST_TYPO_JOKE", "only")
+
+    joke = terminal._pick_typo_joke()
+
+    assert joke == "only"
+    assert terminal._LAST_TYPO_JOKE == "only"
 
 
 def test_run_help_mentions_name_and_run_id(

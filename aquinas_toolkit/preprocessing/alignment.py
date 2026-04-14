@@ -55,7 +55,7 @@ def align_event_group(
         raise ValueError("Cannot align an event group without active sensors.")
 
     organizer_frames = [
-        (sensor_name, event_group.waveforms[sensor_name][1].copy()) for sensor_name in active_sensors
+        (sensor_name, event_group.waveforms[sensor_name][1]) for sensor_name in active_sensors
     ]
     aligned_measures = organizer_align_sensor_frames(organizer_frames)
     rows_reference = int(len(organizer_frames[0][1]))
@@ -65,18 +65,16 @@ def align_event_group(
     aligned_waveform = pd.DataFrame({"timestamp_utc": aligned_measures["timestamp"]}) if not aligned_measures.empty else pd.DataFrame(columns=["timestamp_utc"])
     match_stats: dict[str, dict[str, int]] = {}
     for sensor_name, frame in organizer_frames:
-        series = pd.to_numeric(frame[sensor_name], errors="coerce") if not frame.empty else pd.Series(dtype=float)
+        n_sensor_rows = len(frame) if not frame.empty else 0
         matched_rows = rows_after_alignment
-        unmatched_rows = int(len(series) - matched_rows) if len(series) >= matched_rows else 0
+        unmatched_rows = n_sensor_rows - matched_rows if n_sensor_rows >= matched_rows else 0
         match_stats[sensor_name] = {
             "matched_rows": matched_rows,
             "unmatched_rows": unmatched_rows,
         }
         if not aligned_measures.empty:
-            aligned_waveform[sensor_name] = pd.to_numeric(
-                aligned_measures[sensor_name],
-                errors="coerce",
-            ).to_numpy(dtype=float)
+            # Data is already numeric from load_raw_file_prepped
+            aligned_waveform[sensor_name] = aligned_measures[sensor_name].to_numpy(dtype=float)
         else:
             aligned_waveform[sensor_name] = pd.Series(dtype=float)
 
@@ -118,53 +116,118 @@ def organizer_align_sensor_frames(
     if not sensor_frames:
         return pd.DataFrame(columns=["timestamp"])
 
-    dynamic = [(sensor_name, frame.reset_index(drop=True).copy()) for sensor_name, frame in sensor_frames]
-    if dynamic[0][1].empty:
-        columns = ["timestamp", *[sensor_name for sensor_name, _ in dynamic]]
-        return pd.DataFrame(columns=columns)
+    sensor_names = [name for name, _ in sensor_frames]
+    all_columns = ["timestamp", *sensor_names]
 
-    data_m: list[pd.DataFrame] = [_empty_measure_frame(sensor_name) for sensor_name, _ in dynamic]
-    data_m[0] = dynamic[0][1].copy()
-    for _ in range(SYNCHRO_PASSES):
-        for index in range(1, len(dynamic)):
-            sensor_name, frame = dynamic[index]
-            if frame.empty:
-                continue
+    first_frame = sensor_frames[0][1].reset_index(drop=True)
+    if first_frame.empty:
+        return pd.DataFrame(columns=all_columns)
 
-            time_ref = synchro_indices(data_m[0]["timestamp"], frame["timestamp"])
-            non_zero = time_ref[time_ref != 0]
-            if len(non_zero) == 0:
-                data_m[0] = data_m[0].iloc[0:0].copy()
-                data_m[index] = _empty_measure_frame(sensor_name)
-                continue
+    # Work with numpy arrays internally to avoid DataFrame overhead.
+    # ref_ts/ref_vals track the reference sensor's timestamps and values;
+    # sensor_vals[i] holds the aligned value array for sensor i.
+    ref_ts = _to_datetime64_ns(first_frame["timestamp"])
+    ref_vals = first_frame[sensor_names[0]].to_numpy(dtype=float)
 
-            unique_ref = pd.unique(pd.Series(non_zero))
-            data_m[0] = data_m[0].iloc[[int(value) - 1 for value in unique_ref]].reset_index(drop=True)
-            time_ref_series = pd.Series(time_ref)
-            keep_mask = time_ref_series.ne(0) & ~time_ref_series.duplicated()
-            measures = pd.to_numeric(
-                frame.loc[keep_mask.to_numpy(), sensor_name],
-                errors="coerce",
-            ).reset_index(drop=True)
-            data_m[index] = pd.DataFrame(
-                {
-                    "timestamp": data_m[0]["timestamp"].reset_index(drop=True),
-                    sensor_name: measures,
-                }
-            )
+    # sensor_vals[0] will be rebuilt at the end from ref_vals
+    sensor_vals: list[np.ndarray | None] = [None] * len(sensor_frames)
+    sensor_vals[0] = ref_vals
 
-    data_measures = pd.DataFrame({"timestamp": data_m[0]["timestamp"].reset_index(drop=True)})
-    if data_measures.empty:
-        return pd.DataFrame(columns=["timestamp", *[sensor_name for sensor_name, _ in dynamic]])
-
-    for index, (sensor_name, frame) in enumerate(dynamic):
+    sensor_ts_arrays: list[np.ndarray | None] = [None] * len(sensor_frames)
+    sensor_val_arrays: list[np.ndarray | None] = [None] * len(sensor_frames)
+    for i in range(1, len(sensor_frames)):
+        frame = sensor_frames[i][1].reset_index(drop=True)
         if frame.empty:
-            # NaN signals "no data for this sensor" — callers use pd.isna() to detect it.
-            data_measures[sensor_name] = float("nan")
-            continue
-        data_measures[sensor_name] = data_m[index].iloc[:, 1].reset_index(drop=True)
+            sensor_ts_arrays[i] = None
+            sensor_val_arrays[i] = None
+        else:
+            sensor_ts_arrays[i] = _to_datetime64_ns(frame["timestamp"])
+            sensor_val_arrays[i] = frame[sensor_names[i]].to_numpy(dtype=float)
 
-    return data_measures.reset_index(drop=True)
+    for _ in range(SYNCHRO_PASSES):
+        for i in range(1, len(sensor_frames)):
+            if sensor_ts_arrays[i] is None:
+                continue
+
+            time_ref = synchro_indices_arrays(ref_ts, sensor_ts_arrays[i])
+            non_zero_mask = time_ref != 0
+            if not non_zero_mask.any():
+                ref_ts = ref_ts[:0]
+                ref_vals = ref_vals[:0]
+                sensor_vals[0] = ref_vals
+                sensor_ts_arrays[i] = None
+                sensor_val_arrays[i] = None
+                sensor_vals[i] = None
+                continue
+
+            non_zero = time_ref[non_zero_mask]
+            unique_ref = pd.unique(non_zero)
+            ref_indices = (unique_ref - 1).astype(int)
+            ref_ts = ref_ts[ref_indices]
+            ref_vals = ref_vals[ref_indices]
+            sensor_vals[0] = ref_vals
+
+            # Keep only first occurrence of each non-zero synchro index
+            nz_positions = np.flatnonzero(non_zero_mask)
+            _, first_idx = np.unique(time_ref[nz_positions], return_index=True)
+            keep_positions = nz_positions[first_idx]
+
+            sensor_vals[i] = sensor_val_arrays[i][keep_positions].astype(float)
+
+    if len(ref_ts) == 0:
+        return pd.DataFrame(columns=all_columns)
+
+    # Build output DataFrame in one shot
+    data: dict[str, np.ndarray] = {"timestamp": ref_ts}
+    for i, name in enumerate(sensor_names):
+        if sensor_vals[i] is not None and len(sensor_vals[i]) == len(ref_ts):
+            data[name] = sensor_vals[i]
+        else:
+            data[name] = np.full(len(ref_ts), np.nan)
+
+    return pd.DataFrame(data)
+
+
+def _to_datetime64_ns(timestamps: pd.Series | list | np.ndarray) -> np.ndarray:
+    """Convert timestamps to datetime64[ns] numpy array, skipping re-parsing when already datetime64."""
+    if isinstance(timestamps, (pd.Series, pd.Index)):
+        if pd.api.types.is_datetime64_any_dtype(timestamps):
+            return timestamps.to_numpy(dtype="datetime64[ns]")
+    elif isinstance(timestamps, np.ndarray) and timestamps.dtype.kind == "M":
+        return timestamps.astype("datetime64[ns]")
+    return pd.to_datetime(timestamps, utc=True).to_numpy(dtype="datetime64[ns]")
+
+
+def synchro_indices_arrays(
+    reference: np.ndarray,
+    target: np.ndarray,
+) -> np.ndarray:
+    """Core synchro logic on pre-converted datetime64[ns] numpy arrays.
+
+    Uses ``np.searchsorted`` for an O(n log n) single-sort approach
+    instead of the 3-sort merge used previously.
+    """
+    n_ref = len(reference)
+    n_target = len(target)
+    if n_target == 0:
+        return np.zeros(0, dtype=int)
+    if n_ref == 0:
+        return np.zeros(n_target, dtype=int)
+
+    ref_order = np.argsort(reference, kind="mergesort")
+    ref_sorted = reference[ref_order]
+
+    # For each target, find the rightmost reference <= target
+    # searchsorted('right') gives index of first ref > target, so subtract 1
+    pos = np.searchsorted(ref_sorted, target, side="right") - 1
+
+    result = np.zeros(n_target, dtype=int)
+    valid = pos >= 0
+    if valid.any():
+        # Map back from sorted position to original 1-based index
+        result[valid] = ref_order[pos[valid]] + 1
+
+    return result
 
 
 def synchro_indices(
@@ -178,38 +241,9 @@ def synchro_indices(
     reference timestamp that is not after it. Return ``0`` when no such
     reference sample exists.
     """
-    reference = pd.to_datetime(reference_timestamps, utc=True).to_numpy(dtype="datetime64[ns]")
-    target = pd.to_datetime(target_timestamps, utc=True).to_numpy(dtype="datetime64[ns]")
-
-    if len(target) == 0:
-        return np.zeros(0, dtype=int)
-    if len(reference) == 0:
-        return np.zeros(len(target), dtype=int)
-
-    reference_order = np.argsort(reference, kind="mergesort")
-    target_order = np.argsort(target, kind="mergesort")
-
-    combined = np.concatenate([reference, target])
-    markers = np.concatenate(
-        [
-            np.zeros(len(reference), dtype=int),
-            np.arange(1, len(target) + 1, dtype=int),
-        ]
-    )
-    combined_order = np.argsort(combined, kind="mergesort")
-    ordered_markers = markers[combined_order]
-    cumulative_reference = np.cumsum(ordered_markers == 0)
-
-    reference_positions = cumulative_reference[ordered_markers != 0]
-    original_order_positions = np.empty(len(target), dtype=int)
-    original_order_positions[target_order] = reference_positions
-
-    result = original_order_positions.copy()
-    non_zero = original_order_positions != 0
-    if non_zero.any():
-        result[non_zero] = reference_order[original_order_positions[non_zero] - 1] + 1
-
-    return result
+    reference = _to_datetime64_ns(reference_timestamps)
+    target = _to_datetime64_ns(target_timestamps)
+    return synchro_indices_arrays(reference, target)
 
 
 def _empty_measure_frame(sensor_name: str) -> pd.DataFrame:
