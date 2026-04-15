@@ -14,6 +14,7 @@ import yaml
 from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
 from aquinas_toolkit.utils.dataset_config import find_missing_set_names, load_dataset_layout
+from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.debug_logging import RunDebugLogger
 from aquinas_toolkit.utils.run_management import (
     STAGES,
@@ -286,7 +287,7 @@ def _visualization_inputs_available(config_path: Path) -> bool:
     dataset_root_value = data_config.get("dataset_root", "AQUINAS_DATASET")
     dataset_root = Path(dataset_root_value)
     if not dataset_root.is_absolute():
-        dataset_root = Path.cwd() / dataset_root
+        dataset_root = find_workspace_root() / dataset_root
     if not dataset_root.is_dir():
         return False
 
@@ -343,4 +344,4 @@ def _is_interactive_terminal() -> bool:
 
 
 def _ensure_workspace_dataset_available_for_new_run() -> None:
-    _ensure_dataset_available_for_preprocess(Path.cwd() / "configs" / "default.yaml")
+    _ensure_dataset_available_for_preprocess(find_workspace_root() / "configs" / "default.yaml")

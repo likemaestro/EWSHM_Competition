@@ -16,6 +16,28 @@ def test_find_repo_root_returns_project_root() -> None:
     assert (repo_root / "README.md").is_file()
 
 
+def test_find_workspace_root_prefers_current_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "configs").mkdir(parents=True)
+    (workspace / "configs" / "default.yaml").write_text("data:\n  dataset_root: AQUINAS_DATASET\n")
+    (workspace / "subdir").mkdir()
+    monkeypatch.chdir(workspace / "subdir")
+
+    assert dataset_paths.find_workspace_root() == workspace
+
+
+def test_find_workspace_root_falls_back_to_repo_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    assert dataset_paths.find_workspace_root() == dataset_paths.find_repo_root()
+
+
 def test_find_dataset_root_returns_repo_dataset_dir() -> None:
     dataset_root = dataset_paths.find_dataset_root()
 

@@ -16,7 +16,10 @@ script in `pyproject.toml`.
 | `aquinas run train [--run-id ID]` | Run model training in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas run score [--run-id ID]` | Run health score computation in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas info` | Show dataset summary (sensors, events, date ranges) |
-| `aquinas data fetch [--force] [--yes] [--keep-zip]` | Download static dataset archive with Rich progress, verify SHA256, and extract to `data.dataset_root` |
+| `aquinas data fetch [--force] [--assume-yes] [--keep-zip]` | Download static dataset archive with Rich progress, verify SHA256, and extract to `data.dataset_root` |
+| `aquinas data status` | Show a human-readable summary of dataset readiness |
+| `aquinas data verify` | Strictly validate that the configured dataset root is complete |
+| `aquinas data path` | Print the resolved dataset root path |
 | `aquinas viz build [--run-id ID]` | Explicitly rebuild the offline visualization bundle for a run |
 | `aquinas viz open [--run-id ID] [--host HOST] [--port PORT]` | Serve the visualization bundle over local HTTP and open it in the default browser |
 | `aquinas --about` / `aquinas about` | Show toolkit metadata and maintainers |
@@ -51,6 +54,9 @@ script in `pyproject.toml`.
 - `aquinas data fetch` shows archive download progress with transferred
   bytes, download speed, elapsed time, and ETA when the server exposes a
   total size.
+- `aquinas data status` is intended for human inspection.
+- `aquinas data verify` is intended for strict readiness checks and scripting.
+- `aquinas data path` prints only the resolved dataset root path.
 - `aquinas run` prints pipeline checkpoint lines after each completed stage
   (`1/4 completed`, `2/4 completed`, ...) while stage-level progress remains visible.
 - Stage implementations own their inner progress details (for example,

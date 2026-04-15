@@ -279,7 +279,134 @@ def test_data_help_mentions_fetch(
     captured = capsys.readouterr()
     assert "AQUINAS DATA" in captured.out
     assert "aquinas data fetch" in captured.out
+    assert "aquinas data status" in captured.out
+    assert "aquinas data verify" in captured.out
+    assert "aquinas data path" in captured.out
     assert "--force" in captured.out
+    assert "--assume-yes" in captured.out
+
+
+def test_data_status_reports_complete_dataset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "status"])
+
+    data_mod.run()
+
+    captured = capsys.readouterr()
+    assert "AQUINAS Data Status" in captured.out
+    assert "Status: complete" in captured.out
+    assert "Missing sets: none" in captured.out
+
+
+def test_data_status_exits_1_for_stub_dataset_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    dataset_root = tmp_path / "AQUINAS_DATASET"
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    (dataset_root / "README.md").write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "status"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        data_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Root state: stub" in captured.out
+    assert "Status: incomplete" in captured.out
+
+
+def test_data_verify_reports_missing_dataset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "verify"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        data_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Dataset root does not exist" in captured.out
+
+
+def test_data_path_prints_resolved_dataset_root_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "path"])
+
+    data_mod.run()
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == str(tmp_path / "AQUINAS_DATASET")
+    assert captured.err == ""
+
+
+def test_data_fetch_accepts_assume_yes_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    captured: dict[str, object] = {}
+
+    def fake_fetch_dataset(layout, *, source=None, force=False, assume_yes=False, keep_zip=False):
+        del source
+        captured["dataset_root"] = layout.dataset_root
+        captured["force"] = force
+        captured["assume_yes"] = assume_yes
+        captured["keep_zip"] = keep_zip
+        return layout.dataset_root
+
+    monkeypatch.setattr(data_mod, "fetch_dataset", fake_fetch_dataset)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "fetch", "--force", "--assume-yes"])
+
+    data_mod.run()
+
+    assert captured == {
+        "dataset_root": tmp_path / "AQUINAS_DATASET",
+        "force": True,
+        "assume_yes": True,
+        "keep_zip": False,
+    }
+
+
+def test_data_fetch_keeps_yes_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    captured: dict[str, object] = {}
+
+    def fake_fetch_dataset(layout, *, source=None, force=False, assume_yes=False, keep_zip=False):
+        del source
+        captured["assume_yes"] = assume_yes
+        return layout.dataset_root
+
+    monkeypatch.setattr(data_mod, "fetch_dataset", fake_fetch_dataset)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "fetch", "--yes"])
+
+    data_mod.run()
+
+    assert captured["assume_yes"] is True
 
 
 def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(

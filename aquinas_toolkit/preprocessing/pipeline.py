@@ -34,6 +34,7 @@ from aquinas_toolkit.preprocessing.store import (
     preprocess_store_path,
 )
 from aquinas_toolkit.preprocessing.zeroing import ZEROING_METHODS, zero_loaded_event_group
+from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir, write_stage_progress
 
 
@@ -616,7 +617,7 @@ def _resolve_repo_path(path_value: str | Path) -> Path:
     path = Path(path_value)
     if path.is_absolute():
         return path
-    return Path.cwd() / path
+    return find_workspace_root() / path
 
 
 def annotate_sensor_records(

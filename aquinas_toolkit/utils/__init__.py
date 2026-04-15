@@ -8,6 +8,7 @@ from typing import Any
 from aquinas_toolkit.utils.dataset_paths import (
     find_dataset_root,
     find_repo_root,
+    find_workspace_root,
     list_dataset_dirs,
 )
 
@@ -16,6 +17,7 @@ __all__ = [
     "plot_sensor_grid",
     "plot_sensor_overlay",
     "find_repo_root",
+    "find_workspace_root",
     "find_dataset_root",
     "list_dataset_dirs",
 ]

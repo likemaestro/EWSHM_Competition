@@ -279,6 +279,9 @@ aquinas viz build --include-waveforms
 aquinas viz open                   # serve the viewer locally and open it in the default browser
 aquinas info                       # dataset summary
 aquinas data fetch                 # download + verify + extract dataset archive
+aquinas data status                # human-readable dataset readiness summary
+aquinas data verify                # strict dataset completeness check
+aquinas data path                  # print the resolved dataset root
 aquinas about                      # toolkit metadata and maintainers
 aquinas --version                  # installed CLI version
 ```

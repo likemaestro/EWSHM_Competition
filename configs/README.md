@@ -40,7 +40,7 @@ before starting a new run.
 
 | Key | Default | v1 meaning and supported values | Consumed now | Affects | Verify |
 |---|---|---|---|---|---|
-| `data.dataset_root` | `AQUINAS_DATASET` | Path to the dataset root. Absolute paths are used as-is. Relative paths are resolved against the current workspace root; in normal repo-root usage this makes the path repo-relative. A stub root that only contains placeholder files such as `README.md` or `.gitkeep` is treated as an empty bootstrap destination by `aquinas data fetch`. | Yes | Which dataset folder `run_preprocessing()` opens for each SET, and where `aquinas data fetch` installs the archive | `results/<run_id>/config.yaml`, CLI run summary, and `aquinas info` |
+| `data.dataset_root` | `AQUINAS_DATASET` | Path to the dataset root. Absolute paths are used as-is. Relative paths are resolved against the active workspace root when a local `configs/default.yaml` is present in the current directory tree; otherwise the installed repository root is used so the `aquinas` command still behaves sensibly when launched from elsewhere. A stub root that only contains placeholder files such as `README.md` or `.gitkeep` is treated as an empty bootstrap destination by `aquinas data fetch`; `aquinas data status` and `aquinas data verify` report that state explicitly. | Yes | Which dataset folder `run_preprocessing()` opens for each SET, and where `aquinas data fetch` installs the archive | `results/<run_id>/config.yaml`, CLI run summary, and `aquinas info` |
 | `data.sets` | All five AQUINAS SET folders | Ordered list of monthly datasets to process. v1 expects valid AQUINAS set folder names such as `AQUINAS_SET1_2022_07`. Dataset availability is defined by the presence of every configured set directory under `data.dataset_root`. | Yes | Which SETs are looped over, and in what order, during preprocessing, and whether the CLI considers the dataset complete enough to run | `results/<run_id>/config.yaml`, `sensor_records.csv`, `event_manifest.csv`, `summary.json`, and CLI bootstrap messages |
 
 The public archive URL and SHA256 used by `aquinas data fetch` are
@@ -76,7 +76,7 @@ under `preprocessing.alignment`.
 
 | Key | Default | v1 meaning and supported values | Consumed now | Affects | Verify |
 |---|---|---|---|---|---|
-| `output.results_dir` | `results` | Root directory where run folders and `latest.json` are written. Relative paths are resolved against the current workspace root. | Yes | Run creation, run lookup, latest pointer, and stage output placement | CLI run summary, `results/latest.json`, and the on-disk run layout |
+| `output.results_dir` | `results` | Root directory where run folders and `latest.json` are written. Relative paths follow the same workspace-root resolution as `data.dataset_root`, preferring a local workspace config and otherwise falling back to the installed repository root. | Yes | Run creation, run lookup, latest pointer, and stage output placement | CLI run summary, `results/latest.json`, and the on-disk run layout |
 
 ## How to verify a run used a setting
 

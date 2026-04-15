@@ -8,7 +8,8 @@ import pytest
 
 from aquinas_toolkit.data_fetch import DatasetFetchError, _download_archive, fetch_dataset
 from aquinas_toolkit.dataset_source import DatasetArchiveSource
-from aquinas_toolkit.utils.dataset_config import DatasetLayout, load_dataset_layout
+from aquinas_toolkit.utils.dataset_config import DatasetLayout, inspect_dataset_layout, load_dataset_layout
+from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 
 
 def _build_dataset_zip(zip_path: Path, *, set_names: tuple[str, ...], root_dir_name: str = "AQUINAS_DATASET") -> None:
@@ -30,9 +31,40 @@ def _sha256_of(path: Path) -> str:
 def test_load_dataset_layout_defaults_without_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     layout = load_dataset_layout()
-    assert layout.dataset_root == tmp_path / "AQUINAS_DATASET"
+    assert layout.dataset_root == find_workspace_root() / "AQUINAS_DATASET"
     assert len(layout.set_names) == 5
     assert layout.set_names[0] == "AQUINAS_SET1_2022_07"
+
+
+def test_load_dataset_layout_prefers_current_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / "configs"
+    config_dir.mkdir(parents=True)
+    (config_dir / "default.yaml").write_text("data:\n  dataset_root: custom_data\n", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    layout = load_dataset_layout()
+
+    assert layout.dataset_root == workspace / "custom_data"
+
+
+def test_inspect_dataset_layout_reports_stub_root(tmp_path: Path) -> None:
+    layout = DatasetLayout(
+        dataset_root=tmp_path / "AQUINAS_DATASET",
+        set_names=("AQUINAS_SET1_2022_07",),
+    )
+    layout.dataset_root.mkdir(parents=True, exist_ok=True)
+    (layout.dataset_root / "README.md").write_text("stub", encoding="utf-8")
+
+    status = inspect_dataset_layout(layout)
+
+    assert status.dataset_root_exists is True
+    assert status.dataset_root_is_stub is True
+    assert status.dataset_is_complete is False
+    assert status.missing_set_names == ("AQUINAS_SET1_2022_07",)
 
 
 def test_fetch_dataset_extracts_valid_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

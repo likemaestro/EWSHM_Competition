@@ -13,7 +13,7 @@ import zipfile
 
 from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.dataset_source import DEFAULT_DATASET_SOURCE, DatasetArchiveSource
-from aquinas_toolkit.utils.dataset_config import DatasetLayout, find_missing_set_names
+from aquinas_toolkit.utils.dataset_config import DatasetLayout, inspect_dataset_layout
 
 
 class DatasetFetchError(RuntimeError):
@@ -30,10 +30,11 @@ def fetch_dataset(
 ) -> Path:
     """Download, verify, and extract the configured dataset archive."""
     _validate_source(source)
-    dataset_root_exists = layout.dataset_root.exists()
-    missing_set_names = find_missing_set_names(layout)
-    dataset_is_complete = not missing_set_names
-    dataset_root_is_stub = dataset_root_exists and _is_stub_dataset_root(layout.dataset_root)
+    dataset_status = inspect_dataset_layout(layout)
+    dataset_root_exists = dataset_status.dataset_root_exists
+    missing_set_names = list(dataset_status.missing_set_names)
+    dataset_is_complete = dataset_status.dataset_is_complete
+    dataset_root_is_stub = dataset_status.dataset_root_is_stub
 
     if dataset_root_exists and dataset_is_complete:
         if not force:
@@ -212,17 +213,6 @@ def _replace_dataset_root(*, source_root: Path, destination_root: Path, force: b
             shutil.rmtree(destination_root)
 
     shutil.move(str(source_root), str(destination_root))
-
-
-def _is_stub_dataset_root(dataset_root: Path) -> bool:
-    if not dataset_root.is_dir():
-        return False
-
-    allowed_names = {"README.md", ".gitkeep"}
-    for child in dataset_root.iterdir():
-        if child.name not in allowed_names:
-            return False
-    return True
 
 
 def _clear_stub_dataset_root(dataset_root: Path) -> None:

@@ -16,6 +16,7 @@ import pandas as pd
 import yaml
 
 from aquinas_toolkit.io import AquinasReader
+from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.run_management import RunContext, read_metadata
 from aquinas_toolkit.visualization.layout import build_bridge_geometry, build_sensor_layout
 
@@ -170,7 +171,7 @@ def _resolve_dataset_selection(
     raw_root = data_config.get("dataset_root", "AQUINAS_DATASET")
     dataset_root = Path(raw_root)
     if not dataset_root.is_absolute():
-        dataset_root = Path.cwd() / dataset_root
+        dataset_root = find_workspace_root() / dataset_root
 
     configured_sets = data_config.get("sets") or sorted(path.name for path in dataset_root.glob("AQUINAS_SET*"))
     if not configured_sets:

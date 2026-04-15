@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from aquinas_toolkit.utils.dataset_paths import find_workspace_root
+
 DEFAULT_CONFIG_PATH = Path("configs/default.yaml")
 DEFAULT_RESULTS_DIR = Path("results")
 LATEST_POINTER_NAME = "latest.json"
@@ -49,7 +51,7 @@ class RunContext:
 
 def get_default_config_path() -> Path:
     """Return the repository-local default config path."""
-    return Path.cwd() / DEFAULT_CONFIG_PATH
+    return find_workspace_root() / DEFAULT_CONFIG_PATH
 
 
 def get_results_dir(config_path: Path | None = None) -> Path:
@@ -377,7 +379,7 @@ def _git_command_output(command: list[str]) -> str | None:
 
 
 def _resolve_path(path: Path) -> Path:
-    """Resolve relative paths against the current workspace root."""
+    """Resolve relative paths against the active workspace root."""
     if path.is_absolute():
         return path
-    return Path.cwd() / path
+    return find_workspace_root() / path

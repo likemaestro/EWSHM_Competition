@@ -69,6 +69,7 @@ def test_info_fails_when_dataset_root_is_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, ["AQUINAS_SET1_2022_07"])
     monkeypatch.setattr(sys, "argv", ["aquinas", "info"])
 
     with pytest.raises(SystemExit) as exc_info:

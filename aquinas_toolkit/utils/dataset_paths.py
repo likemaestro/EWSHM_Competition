@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+DEFAULT_CONFIG_PATH = Path("configs/default.yaml")
+
 
 def find_repo_root() -> Path:
     """Return the repository root anchored from this installed source file."""
@@ -14,6 +16,17 @@ def find_repo_root() -> Path:
             return parent
 
     raise FileNotFoundError(f"Could not determine repo root from module path: {module_path}")
+
+
+def find_workspace_root() -> Path:
+    """Return the active workspace root, falling back to the installed repo root."""
+    current = Path.cwd().resolve()
+
+    for parent in (current, *current.parents):
+        if (parent / DEFAULT_CONFIG_PATH).is_file():
+            return parent
+
+    return find_repo_root()
 
 
 def find_dataset_root() -> Path:

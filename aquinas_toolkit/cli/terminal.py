@@ -30,6 +30,8 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
+from aquinas_toolkit.utils.dataset_config import DatasetLayoutStatus
+
 CLI_THEME = Theme(
     {
         "header": "bold bright_blue",
@@ -174,6 +176,21 @@ def print_viz_help() -> None:
 def print_data_help() -> None:
     """Render the ``aquinas data`` help view."""
     get_console().print(render_data_help())
+
+
+def print_data_status(dataset_status: DatasetLayoutStatus) -> None:
+    """Render a human-readable dataset status summary."""
+    get_console().print(render_data_status(dataset_status))
+
+
+def print_data_verify(dataset_status: DatasetLayoutStatus) -> None:
+    """Render a strict dataset verification summary."""
+    get_console().print(render_data_verify(dataset_status))
+
+
+def print_data_path(dataset_root: Path) -> None:
+    """Print the resolved dataset root path for scripting."""
+    get_console().print(str(dataset_root))
 
 
 def print_version_text(version_text: str) -> None:
@@ -472,7 +489,13 @@ def render_viz_help() -> CLIView:
 
 def render_data_help() -> CLIView:
     """Build the ``aquinas data`` help renderable."""
-    usage = Text("Usage: aquinas data fetch [--force] [--yes] [--keep-zip]", style="key")
+    usage = Text(
+        "Usage: aquinas data fetch [--force] [--assume-yes] [--keep-zip]\n"
+        "       aquinas data status\n"
+        "       aquinas data verify\n"
+        "       aquinas data path",
+        style="key",
+    )
     commands = Table(
         box=box.SIMPLE_HEAVY,
         border_style="accent",
@@ -486,23 +509,43 @@ def render_data_help() -> CLIView:
         "aquinas data fetch",
         "Download, verify (SHA256), and extract the static dataset archive.",
     )
+    commands.add_row(
+        "aquinas data status",
+        "Show a human-readable summary of dataset readiness.",
+    )
+    commands.add_row(
+        "aquinas data verify",
+        "Validate that the configured dataset root is complete.",
+    )
+    commands.add_row(
+        "aquinas data path",
+        "Print the resolved dataset root path.",
+    )
 
     options = _notes_table(
         [
             ("--force", "Replace an existing dataset root."),
-            ("--yes", "Skip the interactive overwrite confirmation."),
+            ("--assume-yes", "Skip overwrite confirmation prompts."),
+            ("--yes", "Compatibility alias for `--assume-yes`."),
             ("--keep-zip", "Keep the downloaded ZIP next to the dataset root."),
         ]
     )
 
     plain_text = (
-        "Usage: aquinas data fetch [--force] [--yes] [--keep-zip]\n\n"
+        "Usage: aquinas data fetch [--force] [--assume-yes] [--keep-zip]\n"
+        "       aquinas data status\n"
+        "       aquinas data verify\n"
+        "       aquinas data path\n\n"
         "Subcommands:\n"
         "  fetch  Download, verify (SHA256), and extract the static dataset archive.\n"
+        "  status Show a human-readable summary of dataset readiness.\n"
+        "  verify Validate that the configured dataset root is complete.\n"
+        "  path   Print the resolved dataset root path.\n"
         "Options:\n"
-        "  --force     Replace an existing dataset root.\n"
-        "  --yes       Skip the interactive overwrite confirmation.\n"
-        "  --keep-zip  Keep the downloaded ZIP next to the dataset root."
+        "  --force        Replace an existing dataset root.\n"
+        "  --assume-yes   Skip overwrite confirmation prompts.\n"
+        "  --yes          Compatibility alias for `--assume-yes`.\n"
+        "  --keep-zip     Keep the downloaded ZIP next to the dataset root."
     )
 
     return CLIView(
@@ -517,6 +560,66 @@ def render_data_help() -> CLIView:
             commands,
             Panel(options, title="Options", border_style="accent", box=box.ROUNDED),
         ),
+        plain_text,
+    )
+
+
+def render_data_status(dataset_status: DatasetLayoutStatus) -> CLIView:
+    """Build a human-readable dataset readiness summary."""
+    layout = dataset_status.layout
+    present_count = len(layout.set_names) - len(dataset_status.missing_set_names)
+    status_label = "complete" if dataset_status.dataset_is_complete else "incomplete"
+    root_state = "stub" if dataset_status.dataset_root_is_stub else (
+        "present" if dataset_status.dataset_root_exists else "missing"
+    )
+    missing_text = ", ".join(dataset_status.missing_set_names) if dataset_status.missing_set_names else "none"
+
+    details = _detail_lines(
+        [
+            ("Dataset root", str(layout.dataset_root)),
+            ("Configured sets", str(len(layout.set_names))),
+            ("Present sets", str(present_count)),
+            ("Missing sets", missing_text),
+            ("Root state", root_state),
+            ("Status", status_label),
+        ]
+    )
+    plain_text = (
+        f"Dataset root: {layout.dataset_root}\n"
+        f"Configured sets: {len(layout.set_names)}\n"
+        f"Present sets: {present_count}\n"
+        f"Missing sets: {missing_text}\n"
+        f"Root state: {root_state}\n"
+        f"Status: {status_label}"
+    )
+    return CLIView(
+        Panel(details, title="AQUINAS Data Status", border_style="accent", box=box.ROUNDED),
+        plain_text,
+    )
+
+
+def render_data_verify(dataset_status: DatasetLayoutStatus) -> CLIView:
+    """Build a strict dataset verification summary."""
+    layout = dataset_status.layout
+    if dataset_status.dataset_is_complete:
+        message = f"Dataset verification passed for {layout.dataset_root}"
+        plain_text = f"OK: {message}"
+        return CLIView(
+            Panel(Text(message, style="success"), title="AQUINAS Data Verify", border_style="accent", box=box.ROUNDED),
+            plain_text,
+        )
+
+    if dataset_status.dataset_root_is_stub:
+        failure = f"Dataset root is only a stub bootstrap directory: {layout.dataset_root}"
+    elif not dataset_status.dataset_root_exists:
+        failure = f"Dataset root does not exist: {layout.dataset_root}"
+    else:
+        missing = ", ".join(dataset_status.missing_set_names)
+        failure = f"Dataset is incomplete at {layout.dataset_root}. Missing set folders: {missing}"
+
+    plain_text = f"FAIL: {failure}"
+    return CLIView(
+        Panel(Text(failure, style="error"), title="AQUINAS Data Verify", border_style="accent", box=box.ROUNDED),
         plain_text,
     )
 
