@@ -16,6 +16,7 @@ from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
+    DownloadColumn,
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
@@ -23,6 +24,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 from rich.table import Table
 from rich.text import Text
@@ -121,6 +123,22 @@ def build_progress(*, transient: bool = False) -> Progress:
     )
 
 
+def build_download_progress(*, transient: bool = False) -> Progress:
+    """Build a download-oriented progress display with bytes, speed, and ETA."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=get_console(),
+        transient=transient,
+        disable=not get_console().is_terminal,
+    )
+
+
 @contextmanager
 def progress_context(*, transient: bool = False) -> Iterator[Progress]:
     """Yield the active shared progress display, creating one if needed."""
@@ -151,6 +169,11 @@ def print_run_help(stages: tuple[str, ...] | list[str]) -> None:
 def print_viz_help() -> None:
     """Render the ``aquinas viz`` help view."""
     get_console().print(render_viz_help())
+
+
+def print_data_help() -> None:
+    """Render the ``aquinas data`` help view."""
+    get_console().print(render_data_help())
 
 
 def print_version_text(version_text: str) -> None:
@@ -263,6 +286,7 @@ def render_top_level_help() -> CLIView:
     commands.add_column("Description")
     commands.add_row("run [stage]", "Run the full pipeline or a single stage.")
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
+    commands.add_row("data <subcommand>", "Download and manage the local dataset copy.")
     commands.add_row("viz <subcommand>", "Build or open the offline bridge viewer bundle.")
     commands.add_row("about / --about", "Show toolkit metadata and maintainers.")
     commands.add_row("version / --version", "Show installed CLI version.")
@@ -271,6 +295,7 @@ def render_top_level_help() -> CLIView:
     notes = _notes_table(
         [
             ("Stages", "preprocess, features, train, score"),
+            ("Data", "Use `aquinas data fetch` to bootstrap AQUINAS_DATASET."),
             ("Viewer", "Use `aquinas viz build` to package an offline visualization."),
             ("About", "Use `aquinas --about` to show toolkit metadata."),
             ("Version", "Use `aquinas --version` to show the installed version."),
@@ -284,12 +309,14 @@ def render_top_level_help() -> CLIView:
         "Commands:\n"
         "  run [stage]   Run the analysis pipeline (all stages, or a specific one).\n"
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
+        "  data <subcommand>  Download and manage the local dataset copy.\n"
         "  viz <subcommand>  Build or open the offline bridge viewer bundle.\n"
         "  about         Show toolkit metadata and maintainers.\n"
         "  version       Show installed CLI version.\n"
         "  help          Show this usage message.\n"
         "Notes:\n"
         "  Stages: preprocess, features, train, score\n"
+        "  Data: Use `aquinas data fetch` to bootstrap AQUINAS_DATASET.\n"
         "  Viewer: Use `aquinas viz build` to package an offline visualization.\n"
         "  About: Use `aquinas --about` to show toolkit metadata.\n"
         "  Version: Use `aquinas --version` to show the installed version.\n"
@@ -443,6 +470,57 @@ def render_viz_help() -> CLIView:
     )
 
 
+def render_data_help() -> CLIView:
+    """Build the ``aquinas data`` help renderable."""
+    usage = Text("Usage: aquinas data fetch [--force] [--yes] [--keep-zip]", style="key")
+    commands = Table(
+        box=box.SIMPLE_HEAVY,
+        border_style="accent",
+        header_style="header",
+        expand=True,
+        show_lines=False,
+    )
+    commands.add_column("Invocation", style="key", no_wrap=True)
+    commands.add_column("Description")
+    commands.add_row(
+        "aquinas data fetch",
+        "Download, verify (SHA256), and extract the static dataset archive.",
+    )
+
+    options = _notes_table(
+        [
+            ("--force", "Replace an existing dataset root."),
+            ("--yes", "Skip the interactive overwrite confirmation."),
+            ("--keep-zip", "Keep the downloaded ZIP next to the dataset root."),
+        ]
+    )
+
+    plain_text = (
+        "Usage: aquinas data fetch [--force] [--yes] [--keep-zip]\n\n"
+        "Subcommands:\n"
+        "  fetch  Download, verify (SHA256), and extract the static dataset archive.\n"
+        "Options:\n"
+        "  --force     Replace an existing dataset root.\n"
+        "  --yes       Skip the interactive overwrite confirmation.\n"
+        "  --keep-zip  Keep the downloaded ZIP next to the dataset root."
+    )
+
+    return CLIView(
+        Group(
+            Panel.fit(
+                Text("AQUINAS DATA", style="header"),
+                title="Dataset Command",
+                border_style="accent",
+                box=box.ROUNDED,
+            ),
+            usage,
+            commands,
+            Panel(options, title="Options", border_style="accent", box=box.ROUNDED),
+        ),
+        plain_text,
+    )
+
+
 def render_run_summary(*, title: str, run_id: str, run_dir: Path, config_path: Path) -> CLIView:
     """Build the run summary panel renderable."""
     details = _detail_lines(
@@ -544,11 +622,11 @@ def render_typo_hint(*, command_name: str, suggested_command: str) -> CLIView:
 def render_compact_command_hint() -> CLIView:
     """Build a compact fallback hint for typo-triggered unknown commands."""
     lines = Group(
-        Text("Available commands: run, info, viz, about, version, help", style="key"),
+        Text("Available commands: run, info, data, viz, about, version, help", style="key"),
         Text("Use `aquinas --help` for full usage.", style="muted"),
     )
     plain_text = (
-        "Available commands: run, info, viz, about, version, help\n"
+        "Available commands: run, info, data, viz, about, version, help\n"
         "Use `aquinas --help` for full usage."
     )
     return CLIView(lines, plain_text)
@@ -694,4 +772,5 @@ _TYPO_JOKES: tuple[str, ...] = (
     "Today, typing is the worst.",
     "Whenever I'm about to type something wrong, I think, 'Would an idiot do that?'",
     "You have no idea how high I can typo.",
+    "I love inside jokes. I'd love to be part of one... with the right dataset.",
 )

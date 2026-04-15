@@ -13,7 +13,7 @@ import sys
 from aquinas_toolkit.cli import terminal
 
 
-_TOP_LEVEL_COMMANDS = ("run", "info", "viz", "about", "version", "help")
+_TOP_LEVEL_COMMANDS = ("run", "info", "data", "viz", "about", "version", "help")
 
 
 def main() -> None:
@@ -21,6 +21,7 @@ def main() -> None:
     commands = {
         "run": "aquinas_toolkit.cli.run",
         "info": "aquinas_toolkit.cli.info",
+        "data": "aquinas_toolkit.cli.data",
         "viz": "aquinas_toolkit.cli.viz",
     }
 

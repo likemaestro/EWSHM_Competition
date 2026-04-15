@@ -1,24 +1,46 @@
-# EWSHM 2026 — Structural Health Monitoring Challenge
+<table width="100%" bgcolor="white" cellpadding="8"><tr><td align="center">
+  <img src="docs/logo.png" alt="Aquinas Toolkit" width="440"/>
+</td></tr></table>
 
-```text
- █████╗  ██████╗ ██╗   ██╗██╗███╗   ██╗ █████╗ ███████╗    ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗
-██╔══██╗██╔═══██╗██║   ██║██║████╗  ██║██╔══██╗██╔════╝    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██║ ██╔╝██║╚══██╔══╝
-███████║██║   ██║██║   ██║██║██╔██╗ ██║███████║███████╗       ██║   ██║   ██║██║   ██║██║     █████╔╝ ██║   ██║
-██╔══██║██║▄▄ ██║██║   ██║██║██║╚██╗██║██╔══██║╚════██║       ██║   ██║   ██║██║   ██║██║     ██╔═██╗ ██║   ██║
-██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║  ██║███████║       ██║   ╚██████╔╝╚██████╔╝███████╗██║  ██╗██║   ██║
-╚═╝  ╚═╝ ╚══▀▀═╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝       ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝
-```
+<h1 align="center">AQUINAS Toolkit — EWSHM 2026 Challenge</h1>
 
-Entry for **Challenge 1** of the [13th European Workshop on Structural Health Monitoring](https://www.ewshm2026.com/) (EWSHM 2026), sponsored by [OSMOS Group](https://www.osmos-group.com).
+<p align="center">
+  <a href="https://github.com/likemaestro/EWSHM_Competition/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/likemaestro/EWSHM_Competition/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python ≥3.11">
+  <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/license-private-lightgrey" alt="License">
+</p>
 
-## Team
+<p align="center">
+  Offline, unsupervised structural health monitoring for the AQUINAS viaduct dataset.<br/>
+  Built for Challenge 1 of the <a href="https://www.ewshm2026.com/">13th European Workshop on Structural Health Monitoring (EWSHM 2026)</a>, sponsored by <a href="https://www.osmos-group.com/">OSMOS Group</a>.<br/>
+  The current toolkit already covers data access, organizer-aligned preprocessing, feature extraction, CLI runs, and reproducible run artifacts.
+</p>
 
-- Amir Zare Beiranvand
-- Liv Breivik
-- Mohsen Rezvani Alile
-- Murat Güven
-- Tommaso Panigati
-- Zhenkun Li
+<p align="center">
+  <b>48 sensors (24 ACC + 24 STR)</b> · <b>100 Hz trigger-based records</b> · <b>5 monthly datasets</b> · <b>offline batch pipeline</b> · <b>reproducible run artifacts</b>
+</p>
+
+<p align="center">
+  <a href="#the-challenge">The challenge</a> ·
+  <a href="#dataset">Dataset</a> ·
+  <a href="#repository-structure">Repository structure</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#current-status">Current status</a> ·
+  <a href="#what-preprocessing-now-does">Preprocessing</a> ·
+  <a href="#evaluation-criteria">Evaluation criteria</a> ·
+  <a href="#timeline">Timeline</a>
+</p>
+
+<p align="center">
+  By Amir Zare Beiranvand, Liv Breivik, Mohsen Rezvani Alile, Murat Güven, Tommaso Panigati, and Zhenkun Li
+</p>
+
+## At a glance
+
+- Research competition entry for an unsupervised, data-driven structural health score built from raw bridge measurements under the EWSHM Challenge 1 constraints
+- Python toolkit with implemented data access, preprocessing, feature-store generation, CLI workflows, and offline visualization for repeatable offline analysis
+- Current emphasis is robust preprocessing and feature extraction; training and global scoring remain intentionally stubbed while the run layout under `results/` is already reproducible
 
 ## The challenge
 
@@ -61,7 +83,7 @@ EWSHM_Competition/
 │
 ├── aquinas_toolkit/          Core Python package
 │   ├── io/                   Data I/O (AquinasReader)              [implemented]
-│   ├── cli/                  CLI commands (aquinas run/info/viz/about/version)   [implemented]
+│   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
 │   ├── preprocessing/        Signal preprocessing                  [implemented]
 │   ├── feature_extraction/   Feature extraction (FDD)              [partial]
 │   ├── training/             Unsupervised anomaly models           [stub]
@@ -87,7 +109,6 @@ EWSHM_Competition/
 ├── results/                  Output figures and data (git-ignored)
 └── AQUINAS_DATASET/          Raw data (git-ignored, user-supplied)
 ```
-
 ## Current status
 
 | Area | Status | Notes |
@@ -96,7 +117,7 @@ EWSHM_Competition/
 | `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
 | `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess and features dispatch; train and score pending |
 | `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
-| `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering → zeroing → alignment pipeline with manifests and QC artifacts |
+| `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering -> zeroing -> alignment pipeline with manifests and QC artifacts |
 | `aquinas_toolkit.feature_extraction` | Partial | FDD modal analysis (peak picking, mode shapes) implemented; time-domain features pending |
 | `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
 | `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
@@ -105,7 +126,7 @@ EWSHM_Competition/
 
 The preprocessing stage now reflects organizer guidance shared on
 April 9, 2026 through the `AQUINAS_Explorer.R` helper script and a
-follow-up email from François-Baptiste Cartiaux:
+follow-up email from Francois-Baptiste Cartiaux:
 
 - the `AQUINAS_Explorer.R` helper script shaped the current event
   lookup, synchronization, zeroing, and aligned-export API
@@ -122,11 +143,11 @@ follow-up email from François-Baptiste Cartiaux:
 
 ## What preprocessing now does
 
-Pipeline order: **band-pass filter → zeroing → alignment**
+Pipeline order: **band-pass filter -> zeroing -> alignment**
 
 - groups events by deck and exact event window (`Start_Time` / `End_Time`)
 - queries organizer-style timestamp windows with strict containment
-- applies a zero-phase Butterworth band-pass filter (default 0.5–20 Hz) to
+- applies a zero-phase Butterworth band-pass filter (default 0.5-20 Hz) to
   each raw waveform before any baseline or timing correction
 - applies per-sensor linear-endpoint zeroing (baseline removal) after filtering
 - aligns sensors with the organizer `Synchro()` workflow:
@@ -149,7 +170,7 @@ Team-facing details and rationale live in:
 ### 1. Clone and set up
 
 ```bash
-git clone https://github.com/likeaestro/EWSHM_Competition.git
+git clone https://github.com/likemaestro/EWSHM_Competition.git
 cd EWSHM_Competition
 python -m venv .venv
 
@@ -164,11 +185,36 @@ pip install -e .
 
 This project targets Python 3.11 or newer.
 
-### 2. Place the dataset
+### 2. Bootstrap the dataset
 
-Download the AQUINAS dataset and extract it so the folder structure is:
+Preferred:
 
+```bash
+aquinas data fetch
 ```
+
+This downloads the static archive source, verifies SHA256, and extracts
+to `AQUINAS_DATASET/` (or your configured `data.dataset_root`).
+
+The fetch command now:
+
+- streams the archive download with a Rich progress bar
+- shows transferred bytes and download speed
+- shows ETA when the remote response exposes `Content-Length`
+- treats a placeholder dataset root such as a repo-shipped `AQUINAS_DATASET/README.md`
+  as a fresh bootstrap target rather than an overwrite case
+- treats a dataset as complete only when all configured `data.sets`
+  folders exist under `data.dataset_root`
+
+If the local dataset copy is corrupted and you want to replace it:
+
+```bash
+aquinas data fetch --force
+```
+
+Manual extraction is still supported. The expected folder structure is:
+
+```text
 AQUINAS_DATASET/
 ├── README.md
 ├── AQUINAS_SET1_2022_07/
@@ -237,6 +283,7 @@ aquinas viz build                  # explicitly rebuild the viewer for the activ
 aquinas viz build --include-waveforms
 aquinas viz open                   # serve the viewer locally and open it in the default browser
 aquinas info                       # dataset summary
+aquinas data fetch                 # download + verify + extract dataset archive
 aquinas about                      # toolkit metadata and maintainers
 aquinas --version                  # installed CLI version
 ```
@@ -263,7 +310,8 @@ Implemented behavior:
 - Edit `configs/default.yaml` before creating a new run. v1 does not
   expose a separate `--config` flag.
 - `--name` is optional and only applies when creating a new run.
-- `aquinas run` and `aquinas run preprocess` always create a fresh run.
+- `aquinas run` and `aquinas run preprocess` validate dataset availability
+  before creating a fresh run.
 - `aquinas run features|train|score` use `--run-id` when provided,
   otherwise they resolve `results/latest.json`.
 - New runs snapshot `configs/default.yaml` into
@@ -273,6 +321,14 @@ Implemented behavior:
 - When the configured AQUINAS dataset tree is available locally,
   `aquinas run ...` refreshes `results/<run_id>/visualization/`
   automatically.
+- Dataset availability means every configured `data.sets` folder exists
+  under `data.dataset_root`, not merely that the root path exists.
+- If dataset folders are missing, `aquinas info`, `aquinas run`, and
+  `aquinas run preprocess` prompt to bootstrap with `aquinas data fetch`
+  in interactive terminals before any new run is created.
+- In non-interactive terminals, missing or incomplete dataset inputs
+  fail clearly before run creation and point users to `aquinas data fetch`
+  or `aquinas data fetch --force`.
 - Stage prerequisites are enforced:
   `preprocess -> features -> train -> score`.
 - Re-running a completed stage in the same run is intentionally not
@@ -334,10 +390,10 @@ What the viewer currently shows:
   directly on the top slab surface of each deck
 - Sensor glyphs placed on **exterior** structural surfaces so they are
   always visible and clickable:
-  - `SUP_STR` — top of top slab (pushed upward)
-  - `INF_STR` — bottom of bottom slab (pushed downward)
-  - `ACC_Z / ACC_Y` — outer edge of bottom slab (pushed outward)
-  - `SHE_STR` — outer face of web at mid-height
+  - `SUP_STR` - top of top slab (pushed upward)
+  - `INF_STR` - bottom of bottom slab (pushed downward)
+  - `ACC_Z / ACC_Y` - outer edge of bottom slab (pushed outward)
+  - `SHE_STR` - outer face of web at mid-height
 - A top-level `ALL | ACC | STR` family toggle
 - Proxy metrics from AQUINAS index tables:
   event count, mean range, mean absolute mean value, mean duration,
@@ -372,3 +428,18 @@ Current limitation / WIP:
 | 40% | Quality of scientific approach, presentation, and discussion |
 | 40% | Quality of results and published code |
 | 20% | Innovation and expected impact |
+
+```text
+ █████╗  ██████╗ ██╗   ██╗██╗███╗   ██╗ █████╗ ███████╗
+██╔══██╗██╔═══██╗██║   ██║██║████╗  ██║██╔══██╗██╔════╝
+███████║██║   ██║██║   ██║██║██╔██╗ ██║███████║███████╗
+██╔══██║██║▄▄ ██║██║   ██║██║██║╚██╗██║██╔══██║╚════██║
+██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║  ██║███████║
+╚═╝  ╚═╝ ╚══▀▀═╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
+                             ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗
+                             ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██║ ██╔╝██║╚══██╔══╝
+                                ██║   ██║   ██║██║   ██║██║     █████╔╝ ██║   ██║
+                                ██║   ██║   ██║██║   ██║██║     ██╔═██╗ ██║   ██║
+                                ██║   ╚██████╔╝╚██████╔╝███████╗██║  ██╗██║   ██║
+                                ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝
+```

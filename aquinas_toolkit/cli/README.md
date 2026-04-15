@@ -16,6 +16,7 @@ script in `pyproject.toml`.
 | `aquinas run train [--run-id ID]` | Run model training in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas run score [--run-id ID]` | Run health score computation in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas info` | Show dataset summary (sensors, events, date ranges) |
+| `aquinas data fetch [--force] [--yes] [--keep-zip]` | Download static dataset archive with Rich progress, verify SHA256, and extract to `data.dataset_root` |
 | `aquinas viz build [--run-id ID]` | Explicitly rebuild the offline visualization bundle for a run |
 | `aquinas viz open [--run-id ID] [--host HOST] [--port PORT]` | Serve the visualization bundle over local HTTP and open it in the default browser |
 | `aquinas --about` / `aquinas about` | Show toolkit metadata and maintainers |
@@ -31,9 +32,25 @@ script in `pyproject.toml`.
 - `aquinas viz open` serves the bundle over local HTTP and keeps running
   until interrupted so the browser can load JSON artifacts without
   `file://` CORS problems.
+- Dataset availability means all configured `data.sets` directories exist
+  under `data.dataset_root`.
+- `aquinas run` and `aquinas run preprocess` check dataset availability
+  before creating a new run.
+- If dataset folders are missing, `aquinas info`, `aquinas run`, and
+  `aquinas run preprocess` can bootstrap data via `aquinas data fetch`
+  in interactive terminals.
+- In non-interactive terminals, missing or incomplete dataset inputs fail
+  before new-run creation and point users to `aquinas data fetch` or
+  `aquinas data fetch --force`.
+- A placeholder dataset root containing only stub files such as
+  `README.md` or `.gitkeep` is treated as an empty bootstrap destination,
+  not as a destructive overwrite/repair case.
 
 ## Progress reporting
 
+- `aquinas data fetch` shows archive download progress with transferred
+  bytes, download speed, elapsed time, and ETA when the server exposes a
+  total size.
 - `aquinas run` prints pipeline checkpoint lines after each completed stage
   (`1/4 completed`, `2/4 completed`, ...) while stage-level progress remains visible.
 - Stage implementations own their inner progress details (for example,
@@ -51,5 +68,6 @@ script in `pyproject.toml`.
 - `main.py` -- top-level dispatcher
 - `run.py` -- pipeline execution and run lifecycle management
 - `info.py` -- dataset inspection
+- `data.py` -- dataset bootstrap (`fetch`) command
 - `viz.py` -- visualization build and local serving commands
 - `terminal.py` -- shared Rich terminal rendering helpers and theme

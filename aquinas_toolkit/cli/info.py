@@ -4,24 +4,23 @@ import sys
 from pathlib import Path
 
 from aquinas_toolkit.cli import terminal
+from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
 from aquinas_toolkit.io import AquinasReader
+from aquinas_toolkit.utils.dataset_config import (
+    DatasetLayout,
+    find_missing_set_names,
+    load_dataset_layout,
+)
 
 
 def run() -> None:
     """Show a summary of the AQUINAS dataset."""
-    dataset_root = Path("AQUINAS_DATASET")
-
-    if not dataset_root.exists():
-        terminal.print_error(
-            f"Dataset folder not found at: {dataset_root.resolve()}. "
-            "Place the AQUINAS dataset at AQUINAS_DATASET/ in the repo root."
-        )
+    layout = load_dataset_layout()
+    if not _ensure_dataset_available(layout):
         sys.exit(1)
 
-    set_dirs = sorted(dataset_root.glob("AQUINAS_SET*"))
-    if not set_dirs:
-        terminal.print_error(f"No AQUINAS_SET* folders found in {dataset_root}")
-        sys.exit(1)
+    dataset_root = layout.dataset_root
+    set_dirs = [dataset_root / set_name for set_name in layout.set_names]
 
     terminal.print_info_summary(dataset_root=dataset_root.resolve(), set_count=len(set_dirs))
     rows: list[dict[str, str]] = []
@@ -76,3 +75,46 @@ def _short_error_message(exc: Exception) -> str:
     if "No TABLE_*.json found" in message:
         return "missing tables"
     return message.split(". ")[0]
+
+
+def _ensure_dataset_available(layout: DatasetLayout) -> bool:
+    missing_set_names = find_missing_set_names(layout)
+    if not missing_set_names:
+        return True
+
+    missing_preview = ", ".join(missing_set_names[:3])
+    if len(missing_set_names) > 3:
+        missing_preview = f"{missing_preview}, +{len(missing_set_names) - 3} more"
+
+    message = (
+        f"Dataset is missing or incomplete at {layout.dataset_root}. "
+        f"Missing set folders: {missing_preview}. "
+        "Run `aquinas data fetch` (or `aquinas data fetch --force`) to bootstrap it."
+    )
+
+    if not (_is_interactive_terminal() and _confirm_fetch()):
+        terminal.print_error(message)
+        return False
+
+    try:
+        fetch_dataset(
+            layout,
+            force=False,
+            assume_yes=False,
+            keep_zip=False,
+        )
+    except DatasetFetchError as exc:
+        terminal.print_error(str(exc))
+        return False
+
+    return not find_missing_set_names(layout)
+
+
+def _is_interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _confirm_fetch() -> bool:
+    terminal.print_warning("Dataset is missing. Bootstrap from static archive source now?")
+    answer = input("Fetch dataset now? [y/N]: ").strip().lower()
+    return answer in {"y", "yes"}

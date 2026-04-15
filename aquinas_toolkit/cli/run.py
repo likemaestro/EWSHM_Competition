@@ -12,6 +12,8 @@ from time import perf_counter
 import yaml
 
 from aquinas_toolkit.cli import terminal
+from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
+from aquinas_toolkit.utils.dataset_config import find_missing_set_names, load_dataset_layout
 from aquinas_toolkit.utils.debug_logging import RunDebugLogger
 from aquinas_toolkit.utils.run_management import (
     STAGES,
@@ -126,6 +128,7 @@ def run_command(
         raise RunManagementError("`--name` can only be used when creating a new run.")
 
     if creates_new_run:
+        _ensure_workspace_dataset_available_for_new_run()
         run_context = create_run(name=name)
     else:
         run_context = resolve_run(run_id=run_id)
@@ -252,6 +255,8 @@ def _execute_stage(stage: str, run_context: RunContext) -> None:
     module_path, func_name = _STAGE_REGISTRY[stage].split(":")
     module = importlib.import_module(module_path)
     fn = getattr(module, func_name)
+    if stage == "preprocess":
+        _ensure_dataset_available_for_preprocess(run_context.config_path)
     fn(run_context)
 
 
@@ -290,3 +295,52 @@ def _visualization_inputs_available(config_path: Path) -> bool:
         return False
 
     return all((dataset_root / set_name).is_dir() for set_name in configured_sets)
+
+
+def _ensure_dataset_available_for_preprocess(config_path: Path) -> None:
+    layout = load_dataset_layout(config_path)
+    missing_set_names = find_missing_set_names(layout)
+    if not missing_set_names:
+        return
+
+    missing_preview = ", ".join(missing_set_names[:3])
+    if len(missing_set_names) > 3:
+        missing_preview = f"{missing_preview}, +{len(missing_set_names) - 3} more"
+
+    message = (
+        f"Dataset is missing or incomplete at {layout.dataset_root}. "
+        f"Missing set folders: {missing_preview}. "
+        "Run `aquinas data fetch` (or `aquinas data fetch --force`) to bootstrap it."
+    )
+
+    if not _is_interactive_terminal():
+        raise RunManagementError(message)
+
+    terminal.print_warning("Preprocess requires local dataset inputs.")
+    answer = input("Fetch dataset now? [y/N]: ").strip().lower()
+    if answer not in {"y", "yes"}:
+        raise RunManagementError(message)
+
+    try:
+        fetch_dataset(
+            layout,
+            force=False,
+            assume_yes=False,
+            keep_zip=False,
+        )
+    except DatasetFetchError as exc:
+        raise RunManagementError(str(exc)) from exc
+
+    if find_missing_set_names(layout):
+        raise RunManagementError(
+            "Dataset bootstrap finished but required set folders are still missing. "
+            "Run `aquinas data fetch --force` and verify archive contents."
+        )
+
+
+def _is_interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _ensure_workspace_dataset_available_for_new_run() -> None:
+    _ensure_dataset_available_for_preprocess(Path.cwd() / "configs" / "default.yaml")

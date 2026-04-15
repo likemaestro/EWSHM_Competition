@@ -8,6 +8,7 @@ import pytest
 from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.cli.main import main
+from aquinas_toolkit.data_fetch import DatasetFetchError
 from aquinas_toolkit.utils import run_management
 
 
@@ -19,10 +20,23 @@ def _write_default_config(
     workspace: Path,
     *,
     body: str = "output:\n  results_dir: results\n",
+    create_dataset: bool = True,
 ) -> None:
     config_dir = workspace / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "default.yaml").write_text(body, encoding="utf-8")
+    if not create_dataset:
+        return
+
+    dataset_root = workspace / "AQUINAS_DATASET"
+    for set_name in (
+        "AQUINAS_SET1_2022_07",
+        "AQUINAS_SET2_2023_04",
+        "AQUINAS_SET3_2023_08",
+        "AQUINAS_SET4_2024_01",
+        "AQUINAS_SET5_2024_06",
+    ):
+        (dataset_root / set_name).mkdir(parents=True, exist_ok=True)
 
 
 def test_main_shows_usage_when_no_subcommand(
@@ -37,6 +51,7 @@ def test_main_shows_usage_when_no_subcommand(
     assert "Usage: aquinas <command>" in captured.out
     assert "run" in captured.out
     assert "info" in captured.out
+    assert "data" in captured.out
     assert "viz" in captured.out
     assert captured.err == ""
 
@@ -99,7 +114,7 @@ def test_main_typo_hint_for_info_command(
     captured = capsys.readouterr()
     assert "Identity theft is not a joke, Jim. Millions of commands suffer every year." in captured.out
     assert "Did you mean `info`?" in captured.out
-    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
     assert "Use `aquinas --help` for full usage." in captured.out
     assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: infp" in captured.err
@@ -117,7 +132,7 @@ def test_main_typo_hint_for_inserted_info_character(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `info`?" in captured.out
-    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
     assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: infof" in captured.err
 
@@ -134,7 +149,7 @@ def test_main_typo_hint_for_viz_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `viz`?" in captured.out
-    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
     assert "Unknown command: vzi" in captured.err
 
 
@@ -150,7 +165,7 @@ def test_main_typo_hint_for_run_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `run`?" in captured.out
-    assert "Available commands: run, info, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
     assert "Unknown command: rn" in captured.err
 
 
@@ -250,6 +265,23 @@ def test_viz_help_mentions_build_and_open(
     assert "aquinas viz open" in captured.out
 
 
+def test_data_help_mentions_fetch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        data_mod.run()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "AQUINAS DATA" in captured.out
+    assert "aquinas data fetch" in captured.out
+    assert "--force" in captured.out
+
+
 def test_run_full_pipeline_creates_run_and_marks_preprocess_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -335,6 +367,104 @@ def test_run_preprocess_creates_snapshot_and_metadata(
     assert not (run_dir / "stages" / "features").exists()
     assert not (run_dir / "stages" / "train").exists()
     assert not (run_dir / "stages" / "score").exists()
+
+
+def test_run_preprocess_declined_dataset_fetch_does_not_create_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    monkeypatch.setattr(run_mod, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Dataset is missing or incomplete" in captured.err
+    assert not (tmp_path / "results").exists()
+
+
+def test_run_preprocess_fetches_dataset_before_creating_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    order: list[str] = []
+
+    def fake_fetch_dataset(layout, *, source=None, force=False, assume_yes=False, keep_zip=False):
+        del source, force, assume_yes, keep_zip
+        order.append("fetch")
+        for set_name in layout.set_names:
+            (layout.dataset_root / set_name).mkdir(parents=True, exist_ok=True)
+        return layout.dataset_root
+
+    def fake_create_run(name=None):
+        order.append("create_run")
+        return run_management.create_run(name=name)
+
+    monkeypatch.setattr(run_mod, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr(run_mod, "fetch_dataset", fake_fetch_dataset)
+    monkeypatch.setattr(run_mod, "create_run", fake_create_run)
+    monkeypatch.setattr(run_mod, "_execute_stage", lambda stage, run_context: None)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+
+    run_mod.run()
+
+    assert order[:2] == ["fetch", "create_run"]
+    latest = _read_json(tmp_path / "results" / "latest.json")
+    assert latest["run_id"]
+
+
+def test_run_preprocess_failed_dataset_fetch_does_not_create_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    monkeypatch.setattr(run_mod, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr(
+        run_mod,
+        "fetch_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(DatasetFetchError("download failed")),
+    )
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "download failed" in captured.err
+    assert not (tmp_path / "results").exists()
+
+
+def test_run_preprocess_noninteractive_missing_dataset_fails_before_run_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, create_dataset=False)
+    monkeypatch.setattr(run_mod, "_is_interactive_terminal", lambda: False)
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Dataset is missing or incomplete" in captured.err
+    assert "aquinas data fetch" in captured.err
+    assert not (tmp_path / "results").exists()
 
 
 def test_run_preprocess_rejects_run_id(
@@ -773,6 +903,23 @@ def test_main_dispatches_to_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(sys, "argv", ["aquinas", "run", "--help"])
     monkeypatch.setattr(run_mod, "run", fake_run)
+
+    main()
+
+    assert called is True
+
+
+def test_main_dispatches_to_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    called = False
+
+    def fake_run() -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "--help"])
+    monkeypatch.setattr(data_mod, "run", fake_run)
 
     main()
 

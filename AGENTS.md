@@ -31,7 +31,8 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 - **I/O** (`aquinas_toolkit/io/`) -- data loading via `AquinasReader`.
 - **CLI** (`aquinas_toolkit/cli/`) -- `aquinas run preprocess`,
   `aquinas run features`, `aquinas run train`, `aquinas run score`,
-  `aquinas info`, `aquinas viz build`, and `aquinas viz open`.
+  `aquinas info`, `aquinas data fetch`, `aquinas viz build`, and
+  `aquinas viz open`.
   Thin wrappers that call library code.
 - **Pipeline stages** are subpackages: `preprocessing/`, `feature_extraction/`,
   `training/`, `scoring/`. Each has a `README.md` describing its purpose
@@ -43,6 +44,9 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
   jury presentation. They import from `aquinas_toolkit`.
 - **Configs** (`configs/*.yaml`) hold all tunable parameters. Do not
   hardcode hyperparameters or file paths in library code.
+- Dataset archive source metadata for `aquinas data fetch`
+  (`share_url`, `sha256`) is intentionally static and lives in
+  `aquinas_toolkit/dataset_source.py`, not in user config.
 - **Tests** (`tests/`) -- run with `pytest`.
 - **Results** go to `results/` (git-ignored except `.gitkeep`).
 - **Run layout** -- new pipeline runs live under `results/<run_id>/`
@@ -260,6 +264,25 @@ Progress output is suppressed in pytest because stdout is not a terminal.
   between code cells.
 - **No secrets or data in git**: the `AQUINAS_DATASET/` folder and
   `results/` outputs are git-ignored.
+
+## Documentation conventions
+
+- Preserve the project branding as **`AQUINAS Toolkit`** in user-facing
+  documentation; do not silently switch the project name back to
+  `Aquinas Toolkit`.
+- Keep README links aligned to the actual repository owner and workflow
+  paths. The canonical GitHub remote is
+  `https://github.com/likemaestro/EWSHM_Competition`.
+- When editing the README hero, prioritize accurate repo state over
+  aspirational claims. Current public positioning should reflect:
+  implemented data access, preprocessing, feature extraction, CLI
+  workflow, offline visualization, and reproducible run artifacts; the
+  `training/` and `scoring/` stages remain stubs.
+- Keep README quick-access links pointed only at sections that actually
+  exist in the current document.
+- Avoid leaving broken status badges in the README. Remove or fix any
+  badge whose target repository, workflow path, or visibility does not
+  resolve correctly.
 
 ## Pipeline run conventions
 

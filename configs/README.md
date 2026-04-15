@@ -40,8 +40,17 @@ before starting a new run.
 
 | Key | Default | v1 meaning and supported values | Consumed now | Affects | Verify |
 |---|---|---|---|---|---|
-| `data.dataset_root` | `AQUINAS_DATASET` | Path to the dataset root. Absolute paths are used as-is. Relative paths are resolved against the current workspace root; in normal repo-root usage this makes the path repo-relative. | Yes | Which dataset folder `run_preprocessing()` opens for each SET | `results/<run_id>/config.yaml`, CLI run summary, and `aquinas info` |
-| `data.sets` | All five AQUINAS SET folders | Ordered list of monthly datasets to process. v1 expects valid AQUINAS set folder names such as `AQUINAS_SET1_2022_07`. | Yes | Which SETs are looped over, and in what order, during preprocessing | `results/<run_id>/config.yaml`, `sensor_records.csv`, `event_manifest.csv`, `summary.json` |
+| `data.dataset_root` | `AQUINAS_DATASET` | Path to the dataset root. Absolute paths are used as-is. Relative paths are resolved against the current workspace root; in normal repo-root usage this makes the path repo-relative. A stub root that only contains placeholder files such as `README.md` or `.gitkeep` is treated as an empty bootstrap destination by `aquinas data fetch`. | Yes | Which dataset folder `run_preprocessing()` opens for each SET, and where `aquinas data fetch` installs the archive | `results/<run_id>/config.yaml`, CLI run summary, and `aquinas info` |
+| `data.sets` | All five AQUINAS SET folders | Ordered list of monthly datasets to process. v1 expects valid AQUINAS set folder names such as `AQUINAS_SET1_2022_07`. Dataset availability is defined by the presence of every configured set directory under `data.dataset_root`. | Yes | Which SETs are looped over, and in what order, during preprocessing, and whether the CLI considers the dataset complete enough to run | `results/<run_id>/config.yaml`, `sensor_records.csv`, `event_manifest.csv`, `summary.json`, and CLI bootstrap messages |
+
+The public archive URL and SHA256 used by `aquinas data fetch` are
+static code constants in `aquinas_toolkit/dataset_source.py`. They are
+intentionally not exposed as user-tunable config keys.
+
+When the archive host exposes a total byte size, `aquinas data fetch`
+uses it to show Rich download progress with bytes transferred, speed,
+and ETA. When the host omits that header, the CLI still shows live
+bytes transferred and speed without a reliable ETA.
 
 ### `preprocessing`
 

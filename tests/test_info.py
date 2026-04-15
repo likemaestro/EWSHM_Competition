@@ -11,6 +11,19 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_default_config(workspace: Path, set_names: list[str]) -> None:
+    config_dir = workspace / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    rendered_sets = "\n".join(f"    - {name}" for name in set_names)
+    (config_dir / "default.yaml").write_text(
+        "data:\n"
+        "  dataset_root: AQUINAS_DATASET\n"
+        "  sets:\n"
+        f"{rendered_sets}\n",
+        encoding="utf-8",
+    )
+
+
 def _build_info_set(dataset_root: Path, set_name: str, *, include_start_time: bool = True) -> Path:
     set_dir = dataset_root / set_name
     set_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +76,7 @@ def test_info_fails_when_dataset_root_is_missing(
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "Dataset folder not found" in captured.err
+    assert "Dataset is missing or incomplete" in captured.err
 
 
 def test_info_fails_when_dataset_root_has_no_set_folders(
@@ -72,6 +85,7 @@ def test_info_fails_when_dataset_root_has_no_set_folders(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path, ["AQUINAS_SET1_2022_07"])
     (tmp_path / "AQUINAS_DATASET").mkdir()
     monkeypatch.setattr(sys, "argv", ["aquinas", "info"])
 
@@ -80,7 +94,7 @@ def test_info_fails_when_dataset_root_has_no_set_folders(
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "No AQUINAS_SET* folders found" in captured.err
+    assert "Dataset is missing or incomplete" in captured.err
 
 
 def test_info_renders_dataset_summary_table(
@@ -90,6 +104,7 @@ def test_info_renders_dataset_summary_table(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     dataset_root = tmp_path / "AQUINAS_DATASET"
+    _write_default_config(tmp_path, ["AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"])
     _build_info_set(dataset_root, "AQUINAS_SET1_2022_07")
     _build_info_set(dataset_root, "AQUINAS_SET2_2023_04")
     monkeypatch.setattr(sys, "argv", ["aquinas", "info"])
@@ -114,6 +129,7 @@ def test_info_renders_unknown_period_when_start_time_is_missing(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     dataset_root = tmp_path / "AQUINAS_DATASET"
+    _write_default_config(tmp_path, ["AQUINAS_SET1_2022_07"])
     _build_info_set(dataset_root, "AQUINAS_SET1_2022_07", include_start_time=False)
     monkeypatch.setattr(sys, "argv", ["aquinas", "info"])
 
@@ -132,6 +148,7 @@ def test_info_reports_broken_set_without_crashing(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     dataset_root = tmp_path / "AQUINAS_DATASET"
+    _write_default_config(tmp_path, ["AQUINAS_SET1_2022_07", "AQUINAS_SET2_2023_04"])
     _build_info_set(dataset_root, "AQUINAS_SET1_2022_07")
     (dataset_root / "AQUINAS_SET2_2023_04").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(sys, "argv", ["aquinas", "info"])
