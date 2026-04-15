@@ -37,6 +37,7 @@ class ModalAnalysisSettings:
     axis: str = "Z"
     min_common_events: int = 2
     max_events: int | None = 5
+    require_full_channel_set: bool = True
     low_hz: float = 0.5
     high_hz: float = 20.0
     nperseg: int = 1024
@@ -192,6 +193,7 @@ def load_feature_settings(config_path: Path) -> FeatureSettings:
                 if modal_analysis.get("max_events") in {None, "null"}
                 else int(modal_analysis.get("max_events", 5))
             ),
+            require_full_channel_set=bool(modal_analysis.get("require_full_channel_set", True)),
             low_hz=float(modal_analysis.get("low_hz", 0.5)),
             high_hz=float(modal_analysis.get("high_hz", 20.0)),
             nperseg=int(modal_analysis.get("nperseg", 1024)),
@@ -364,6 +366,7 @@ def _build_modal_feature_rows(
             axis=settings.modal_analysis.axis,
             min_common_events=settings.modal_analysis.min_common_events,
             max_events=settings.modal_analysis.max_events,
+            require_full_channel_set=settings.modal_analysis.require_full_channel_set,
             on_candidate_event=advance_candidate,
             on_selected_event=advance_selected,
         )

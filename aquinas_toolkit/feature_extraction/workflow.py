@@ -45,6 +45,7 @@ class PreprocessedEventCollection:
     selected_events: pd.DataFrame
     aligned_events: list[pd.DataFrame]
     channel_names: list[str]
+    expected_channel_names: list[str]
     detail: str = ""
 
 
@@ -116,23 +117,43 @@ def collect_preprocessed_event_matrices(
     axis: str = "Z",
     min_common_events: int = 2,
     max_events: int | None = 5,
+    require_full_channel_set: bool = True,
     on_candidate_event: Callable[[], None] | None = None,
     on_selected_event: Callable[[], None] | None = None,
 ) -> PreprocessedEventCollection:
     """Collect aligned event matrices from preprocess outputs for notebook and stage reuse."""
     retained_events = preprocess_store.iter_retained_events(set_name=set_name, deck=deck)
+    expected_channel_names = _list_expected_channel_names(
+        preprocess_store,
+        set_name=set_name,
+        deck=deck,
+        quantity=quantity,
+        axis=axis,
+    )
     if retained_events.empty:
         return PreprocessedEventCollection(
             available_events=retained_events.copy(),
             selected_events=retained_events.copy(),
             aligned_events=[],
             channel_names=[],
+            expected_channel_names=expected_channel_names,
             detail="no retained events",
+        )
+
+    if require_full_channel_set and len(expected_channel_names) < 2:
+        return PreprocessedEventCollection(
+            available_events=pd.DataFrame(),
+            selected_events=pd.DataFrame(),
+            aligned_events=[],
+            channel_names=[],
+            expected_channel_names=expected_channel_names,
+            detail=f"insufficient configured {quantity}_{axis} channels",
         )
 
     candidate_rows: list[dict[str, Any]] = []
     candidate_sensor_sets: list[set[str]] = []
     candidate_sensor_orders: dict[str, int] = {}
+    expected_channel_set = set(expected_channel_names)
 
     for event in retained_events.itertuples(index=False):
         event_sensors = preprocess_store.load_event_sensors(event.event_id)
@@ -145,6 +166,8 @@ def collect_preprocessed_event_matrices(
         if len(matching) < 2:
             continue
         sensor_names = {sensor_name for sensor_name, _ in matching}
+        if require_full_channel_set and sensor_names != expected_channel_set:
+            continue
         candidate_rows.append(
             {
                 "event_id": str(event.event_id),
@@ -153,6 +176,7 @@ def collect_preprocessed_event_matrices(
                 "start_time_utc": event.start_time_utc,
                 "end_time_utc": event.end_time_utc,
                 "available_channel_count": len(sensor_names),
+                "expected_channel_count": len(expected_channel_names),
             }
         )
         candidate_sensor_sets.append(sensor_names)
@@ -163,12 +187,18 @@ def collect_preprocessed_event_matrices(
 
     available_events = pd.DataFrame(candidate_rows)
     if available_events.empty:
+        detail = (
+            f"no events with all {len(expected_channel_names)} {quantity}_{axis} channels"
+            if require_full_channel_set and expected_channel_names
+            else f"insufficient common {quantity}_{axis} events"
+        )
         return PreprocessedEventCollection(
             available_events=available_events,
             selected_events=available_events.copy(),
             aligned_events=[],
             channel_names=[],
-            detail=f"insufficient common {quantity}_{axis} events",
+            expected_channel_names=expected_channel_names,
+            detail=detail,
         )
 
     if max_events is None:
@@ -179,24 +209,34 @@ def collect_preprocessed_event_matrices(
         selected_sensor_sets = candidate_sensor_sets[: len(selected_candidates.index)]
 
     if len(selected_candidates.index) < min_common_events:
+        detail = (
+            f"insufficient events with all {len(expected_channel_names)} {quantity}_{axis} channels"
+            if require_full_channel_set and expected_channel_names
+            else f"insufficient common {quantity}_{axis} events"
+        )
         return PreprocessedEventCollection(
             available_events=available_events,
             selected_events=selected_candidates,
             aligned_events=[],
             channel_names=[],
-            detail=f"insufficient common {quantity}_{axis} events",
+            expected_channel_names=expected_channel_names,
+            detail=detail,
         )
 
-    common_channels = sorted(
-        set.intersection(*selected_sensor_sets),
-        key=lambda sensor_name: candidate_sensor_orders[sensor_name],
-    )
+    if require_full_channel_set:
+        common_channels = list(expected_channel_names)
+    else:
+        common_channels = sorted(
+            set.intersection(*selected_sensor_sets),
+            key=lambda sensor_name: candidate_sensor_orders[sensor_name],
+        )
     if len(common_channels) < 2:
         return PreprocessedEventCollection(
             available_events=available_events,
             selected_events=selected_candidates,
             aligned_events=[],
             channel_names=common_channels,
+            expected_channel_names=expected_channel_names,
             detail=f"insufficient common {quantity}_{axis} channels",
         )
 
@@ -228,12 +268,18 @@ def collect_preprocessed_event_matrices(
 
     selected_events = pd.DataFrame(used_rows)
     if len(aligned_events) < min_common_events:
+        detail = (
+            f"insufficient full-set {quantity}_{axis} events after dropping missing rows"
+            if require_full_channel_set
+            else f"insufficient {quantity}_{axis} events after dropping missing rows"
+        )
         return PreprocessedEventCollection(
             available_events=available_events,
             selected_events=selected_events,
             aligned_events=[],
             channel_names=common_channels,
-            detail=f"insufficient {quantity}_{axis} events after dropping missing rows",
+            expected_channel_names=expected_channel_names,
+            detail=detail,
         )
 
     return PreprocessedEventCollection(
@@ -241,6 +287,7 @@ def collect_preprocessed_event_matrices(
         selected_events=selected_events,
         aligned_events=aligned_events,
         channel_names=common_channels,
+        expected_channel_names=expected_channel_names,
     )
 
 
@@ -352,6 +399,7 @@ def run_acc_z_fdd_from_preprocess_store(
     deck: str | None = None,
     min_common_events: int = 2,
     max_events: int | None = 5,
+    require_full_channel_set: bool = True,
     sampling_rate_hz: float = 100.0,
     low_hz: float = 0.5,
     high_hz: float = 20.0,
@@ -368,6 +416,7 @@ def run_acc_z_fdd_from_preprocess_store(
         axis="Z",
         min_common_events=min_common_events,
         max_events=max_events,
+        require_full_channel_set=require_full_channel_set,
     )
     if not collection.aligned_events:
         raise ValueError(collection.detail or "No common aligned ACC_Z events were found in preprocess outputs.")
@@ -389,10 +438,35 @@ def run_acc_z_fdd_from_preprocess_store(
             "available_events": collection.available_events,
             "selected_events": collection.selected_events,
             "aligned_events": collection.aligned_events,
+            "expected_channel_names": collection.expected_channel_names,
             "detail": collection.detail,
         }
     )
     return summary
+
+
+def _list_expected_channel_names(
+    preprocess_store: Any,
+    *,
+    set_name: str | None,
+    deck: str | None,
+    quantity: str,
+    axis: str,
+) -> list[str]:
+    if not hasattr(preprocess_store, "list_sensors"):
+        return []
+
+    sensors = preprocess_store.list_sensors(
+        set_name=set_name,
+        deck=deck,
+        quantity=quantity,
+        axis=axis,
+        sensor_status="included",
+    )
+    if sensors.empty:
+        return []
+    ordered = sensors.sort_values(["sensor_order", "sensor_name"], kind="mergesort")
+    return ordered["sensor_name"].astype(str).tolist()
 
 
 def run_acc_z_fdd_from_event_matrices(
