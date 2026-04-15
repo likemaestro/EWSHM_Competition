@@ -194,16 +194,6 @@ aquinas data fetch
 This downloads the static archive source, verifies SHA256, and extracts
 to `AQUINAS_DATASET/` (or your configured `data.dataset_root`).
 
-The fetch command now:
-
-- streams the archive download with a Rich progress bar
-- shows transferred bytes and download speed
-- shows ETA when the remote response exposes `Content-Length`
-- treats a placeholder dataset root such as a repo-shipped `AQUINAS_DATASET/README.md`
-  as a fresh bootstrap target rather than an overwrite case
-- treats a dataset as complete only when all configured `data.sets`
-  folders exist under `data.dataset_root`
-
 If the local dataset copy is corrupted and you want to replace it:
 
 ```bash
@@ -434,10 +424,10 @@ Current limitation / WIP:
 ██╔══██║██║▄▄ ██║██║   ██║██║██║╚██╗██║██╔══██║╚════██║
 ██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║  ██║███████║
 ╚═╝  ╚═╝ ╚══▀▀═╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
-                             ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗
-                             ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██║ ██╔╝██║╚══██╔══╝
-                                ██║   ██║   ██║██║   ██║██║     █████╔╝ ██║   ██║
-                                ██║   ██║   ██║██║   ██║██║     ██╔═██╗ ██║   ██║
-                                ██║   ╚██████╔╝╚██████╔╝███████╗██║  ██╗██║   ██║
-                                ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝
+                                        ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗
+                                        ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██║ ██╔╝██║╚══██╔══╝
+                                           ██║   ██║   ██║██║   ██║██║     █████╔╝ ██║   ██║
+                                           ██║   ██║   ██║██║   ██║██║     ██╔═██╗ ██║   ██║
+                                           ██║   ╚██████╔╝╚██████╔╝███████╗██║  ██╗██║   ██║
+                                           ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝
 ```
