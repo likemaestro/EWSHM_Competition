@@ -1,11 +1,10 @@
-<table width="100%" bgcolor="white" cellpadding="8"><tr><td align="center">
-  <img src="docs/logo.png" alt="Aquinas Toolkit" width="440"/>
-</td></tr></table>
+<p align="center">
+  <img src="docs/logo.png" alt="Aquinas Toolkit" width="100%"/>
+</p>
 
 <h1 align="center">AQUINAS Toolkit — EWSHM 2026 Challenge</h1>
 
 <p align="center">
-  <a href="https://github.com/likemaestro/EWSHM_Competition/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/likemaestro/EWSHM_Competition/ci.yml?branch=main&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python ≥3.11">
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="Version 0.1.0">
   <img src="https://img.shields.io/badge/license-private-lightgrey" alt="License">
@@ -14,7 +13,6 @@
 <p align="center">
   Offline, unsupervised structural health monitoring for the AQUINAS viaduct dataset.<br/>
   Built for Challenge 1 of the <a href="https://www.ewshm2026.com/">13th European Workshop on Structural Health Monitoring (EWSHM 2026)</a>, sponsored by <a href="https://www.osmos-group.com/">OSMOS Group</a>.<br/>
-  The current toolkit already covers data access, organizer-aligned preprocessing, feature extraction, CLI runs, and reproducible run artifacts.
 </p>
 
 <p align="center">
