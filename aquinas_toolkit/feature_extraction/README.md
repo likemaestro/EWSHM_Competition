@@ -61,10 +61,23 @@ and when `features` is executed inside `aquinas run` with the outer pipeline bar
   into deck/span/side/location fields for plotting and reporting
 - `collect_filtered_event_matrices(...)` -- gather per-deck filtered
   ACC_Z multichannel events using preprocessing helpers
+- `collect_preprocessed_event_matrices(...)` -- gather preprocess-backed
+  ACC_Z aligned events, requiring the full configured ACC_Z channel set
+  for the selected set/deck by default
 - `run_acc_z_fdd_workflow(...)` -- run Mohsen's preserved filtered
   ACC_Z FDD workflow for one set/deck
 - `summarize_fdd_results(...)` -- convert FDD outputs into notebook-ready
   peak, amplitude, signed-component, and phase tables
+
+## Current ACC_Z FDD Selection Rule
+
+- The preprocess-backed FDD path works per `(set, deck)` pair.
+- By default it now accepts only events where every configured included
+  `ACC_Z` sensor for that set/deck is present simultaneously.
+- This replaces the earlier permissive fallback that could run with only
+  two common channels and gives mode-shape estimates full spatial coverage.
+- The fallback can still be re-enabled by setting
+  `features.modal_analysis.require_full_channel_set: false` in the run config.
 
 The intended ownership split is:
 

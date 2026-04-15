@@ -354,6 +354,62 @@ class PreprocessStoreReader:
         """Return retained event metadata for downstream stages."""
         return self.list_events(set_name=set_name, deck=deck, discarded=False)
 
+    def list_sensors(
+        self,
+        *,
+        set_name: str | None = None,
+        deck: str | None = None,
+        quantity: str | None = None,
+        axis: str | None = None,
+        sensor_status: str | None = None,
+    ) -> pd.DataFrame:
+        """Return distinct sensors present in preprocess metadata."""
+        query = """
+            SELECT
+                sr.set_name,
+                sr.deck,
+                sr.sensor_name,
+                MIN(sr.sensor_order) AS sensor_order,
+                s.span,
+                s.side,
+                s.location,
+                s.quantity,
+                s.axis
+            FROM sensor_records AS sr
+            JOIN sensors AS s
+              ON s.sensor_name = sr.sensor_name
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if set_name is not None:
+            query += " AND sr.set_name = ?"
+            params.append(set_name)
+        if deck is not None:
+            query += " AND sr.deck = ?"
+            params.append(deck)
+        if quantity is not None:
+            query += " AND s.quantity = ?"
+            params.append(quantity)
+        if axis is not None:
+            query += " AND s.axis = ?"
+            params.append(axis)
+        if sensor_status is not None:
+            query += " AND sr.sensor_status = ?"
+            params.append(sensor_status)
+        query += """
+            GROUP BY
+                sr.set_name,
+                sr.deck,
+                sr.sensor_name,
+                s.span,
+                s.side,
+                s.location,
+                s.quantity,
+                s.axis
+            ORDER BY sr.set_name, sr.deck, sensor_order, sr.sensor_name
+        """
+        return pd.read_sql_query(query, self.conn, params=params)
+
     def load_event_sensors(self, event_id: str) -> pd.DataFrame:
         """Return one row per event/sensor pair in organizer order."""
         query = """
@@ -537,6 +593,72 @@ class LegacyPreprocessCsvReader:
         deck: str | None = None,
     ) -> pd.DataFrame:
         return self.list_events(set_name=set_name, deck=deck, discarded=False)
+
+    def list_sensors(
+        self,
+        *,
+        set_name: str | None = None,
+        deck: str | None = None,
+        quantity: str | None = None,
+        axis: str | None = None,
+        sensor_status: str | None = None,
+    ) -> pd.DataFrame:
+        """Return distinct sensors present in legacy preprocess metadata."""
+        sensor_records = self._load_sensor_records().copy()
+        output_columns = [
+            "set_name",
+            "deck",
+            "sensor_name",
+            "sensor_order",
+            "span",
+            "side",
+            "location",
+            "quantity",
+            "axis",
+        ]
+        if sensor_records.empty:
+            return pd.DataFrame(columns=output_columns)
+
+        if set_name is not None:
+            sensor_records = sensor_records.loc[sensor_records["set_name"] == set_name].copy()
+        if deck is not None:
+            sensor_records = sensor_records.loc[sensor_records["deck"] == deck].copy()
+        if sensor_status is not None:
+            sensor_records = sensor_records.loc[
+                sensor_records["sensor_status"] == sensor_status
+            ].copy()
+        if sensor_records.empty:
+            return pd.DataFrame(columns=output_columns)
+
+        parsed = sensor_records["sensor_name"].map(parse_sensor_name).apply(pd.Series)
+        parsed = parsed[["span", "side", "location", "quantity", "axis"]]
+        sensor_records = pd.concat([sensor_records.reset_index(drop=True), parsed], axis=1)
+        if quantity is not None:
+            sensor_records = sensor_records.loc[sensor_records["quantity"] == quantity].copy()
+        if axis is not None:
+            sensor_records = sensor_records.loc[sensor_records["axis"] == axis].copy()
+        if sensor_records.empty:
+            return pd.DataFrame(columns=output_columns)
+
+        sensors = (
+            sensor_records.groupby(
+                [
+                    "set_name",
+                    "deck",
+                    "sensor_name",
+                    "span",
+                    "side",
+                    "location",
+                    "quantity",
+                    "axis",
+                ],
+                as_index=False,
+            )
+            .agg(sensor_order=("sensor_order", "min"))
+            .sort_values(["set_name", "deck", "sensor_order", "sensor_name"], kind="mergesort")
+            .reset_index(drop=True)
+        )
+        return sensors[output_columns]
 
     def load_event_sensors(self, event_id: str) -> pd.DataFrame:
         """Return one row per event/sensor from legacy sensor_records.csv."""

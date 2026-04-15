@@ -66,6 +66,7 @@ features:
     axis: Z
     min_common_events: 2
     max_events: 5
+    require_full_channel_set: true
     low_hz: 0.5
     high_hz: 20.0
     nperseg: 1024

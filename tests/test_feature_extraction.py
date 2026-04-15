@@ -16,6 +16,7 @@ from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.feature_extraction import (
     open_features_store,
     annotate_mode_shape_locations,
+    collect_preprocessed_event_matrices,
     run_acc_z_fdd_from_preprocess_store,
     frequency_domain_decomposition,
     summarize_fdd_mode_shapes,
@@ -65,6 +66,7 @@ def _write_feature_pipeline_config(workspace: Path) -> None:
             "    axis: Z",
             "    min_common_events: 2",
             "    max_events: 5",
+            "    require_full_channel_set: true",
             "    low_hz: 0.5",
             "    high_hz: 20.0",
             "    nperseg: 128",
@@ -341,7 +343,7 @@ def test_run_features_creates_sqlite_feature_store_and_modal_outputs(
     old_status = family_status.loc[family_status["deck"] == "OLD"].iloc[0]
     assert new_status["status"] == "completed"
     assert old_status["status"] == "skipped"
-    assert "insufficient common ACC_Z" in old_status["detail"]
+    assert "insufficient configured ACC_Z channels" in old_status["detail"]
 
 
 def test_run_features_prints_stage_progress_phases(
@@ -433,6 +435,166 @@ def test_run_acc_z_fdd_from_preprocess_store_reads_canonical_preprocess_outputs(
     assert not summary["selected_events"].empty
     assert len(summary["aligned_events"]) == len(summary["selected_events"])
     assert len(summary["channel_names"]) >= 2
+    assert summary["channel_names"] == summary["expected_channel_names"]
+
+
+class _StubPreprocessStore:
+    def iter_retained_events(
+        self,
+        *,
+        set_name: str | None = None,
+        deck: str | None = None,
+    ) -> pd.DataFrame:
+        rows = pd.DataFrame(
+            [
+                {
+                    "event_id": "evt_full",
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "start_time_utc": pd.Timestamp("2022-07-01T00:00:00Z"),
+                    "end_time_utc": pd.Timestamp("2022-07-01T00:00:10Z"),
+                },
+                {
+                    "event_id": "evt_partial",
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "start_time_utc": pd.Timestamp("2022-07-01T00:01:00Z"),
+                    "end_time_utc": pd.Timestamp("2022-07-01T00:01:10Z"),
+                },
+            ]
+        )
+        if set_name is not None:
+            rows = rows.loc[rows["set_name"] == set_name].copy()
+        if deck is not None:
+            rows = rows.loc[rows["deck"] == deck].copy()
+        return rows.reset_index(drop=True)
+
+    def list_sensors(
+        self,
+        *,
+        set_name: str | None = None,
+        deck: str | None = None,
+        quantity: str | None = None,
+        axis: str | None = None,
+        sensor_status: str | None = None,
+    ) -> pd.DataFrame:
+        rows = pd.DataFrame(
+            [
+                {
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "sensor_name": "NEW_S1_DO_INT_ACC_Z",
+                    "sensor_order": 1,
+                    "span": "S1",
+                    "side": "DO",
+                    "location": "INT",
+                    "quantity": "ACC",
+                    "axis": "Z",
+                },
+                {
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "sensor_name": "NEW_S1_UP_INT_ACC_Z",
+                    "sensor_order": 2,
+                    "span": "S1",
+                    "side": "UP",
+                    "location": "INT",
+                    "quantity": "ACC",
+                    "axis": "Z",
+                },
+                {
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "sensor_name": "NEW_S2_DO_INT_ACC_Z",
+                    "sensor_order": 3,
+                    "span": "S2",
+                    "side": "DO",
+                    "location": "INT",
+                    "quantity": "ACC",
+                    "axis": "Z",
+                },
+            ]
+        )
+        if set_name is not None:
+            rows = rows.loc[rows["set_name"] == set_name].copy()
+        if deck is not None:
+            rows = rows.loc[rows["deck"] == deck].copy()
+        if quantity is not None:
+            rows = rows.loc[rows["quantity"] == quantity].copy()
+        if axis is not None:
+            rows = rows.loc[rows["axis"] == axis].copy()
+        return rows.reset_index(drop=True)
+
+    def load_event_sensors(self, event_id: str) -> pd.DataFrame:
+        if event_id == "evt_full":
+            sensor_names = [
+                "NEW_S1_DO_INT_ACC_Z",
+                "NEW_S1_UP_INT_ACC_Z",
+                "NEW_S2_DO_INT_ACC_Z",
+            ]
+        else:
+            sensor_names = [
+                "NEW_S1_DO_INT_ACC_Z",
+                "NEW_S1_UP_INT_ACC_Z",
+            ]
+        return pd.DataFrame(
+            {
+                "sensor_name": sensor_names,
+                "sensor_order": list(range(1, len(sensor_names) + 1)),
+                "sensor_status": ["included"] * len(sensor_names),
+            }
+        )
+
+    def load_aligned_event(
+        self,
+        event_id: str,
+        *,
+        sensor_names: list[str] | None = None,
+    ) -> pd.DataFrame:
+        ordered = sensor_names or []
+        base = pd.DataFrame(
+            {
+                "timestamp_utc": pd.date_range("2022-07-01T00:00:00Z", periods=4, freq="10ms"),
+            }
+        )
+        for index, sensor_name in enumerate(ordered, start=1):
+            base[sensor_name] = np.linspace(index, index + 1, len(base.index))
+        return base
+
+
+def test_collect_preprocessed_event_matrices_requires_full_channel_set_by_default() -> None:
+    store = _StubPreprocessStore()
+
+    strict = collect_preprocessed_event_matrices(
+        store,
+        set_name="AQUINAS_SET1_2022_07",
+        deck="NEW",
+        quantity="ACC",
+        axis="Z",
+        min_common_events=1,
+        max_events=5,
+        require_full_channel_set=True,
+    )
+    permissive = collect_preprocessed_event_matrices(
+        store,
+        set_name="AQUINAS_SET1_2022_07",
+        deck="NEW",
+        quantity="ACC",
+        axis="Z",
+        min_common_events=1,
+        max_events=5,
+        require_full_channel_set=False,
+    )
+
+    assert strict.expected_channel_names == [
+        "NEW_S1_DO_INT_ACC_Z",
+        "NEW_S1_UP_INT_ACC_Z",
+        "NEW_S2_DO_INT_ACC_Z",
+    ]
+    assert strict.available_events["event_id"].tolist() == ["evt_full"]
+    assert strict.channel_names == strict.expected_channel_names
+    assert permissive.available_events["event_id"].tolist() == ["evt_full", "evt_partial"]
+    assert permissive.channel_names == ["NEW_S1_DO_INT_ACC_Z", "NEW_S1_UP_INT_ACC_Z"]
 
 
 def test_run_features_can_read_legacy_preprocess_csv_artifacts_temporarily(
