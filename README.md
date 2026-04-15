@@ -24,6 +24,7 @@
   <a href="#dataset">Dataset</a> ·
   <a href="#repository-structure">Repository structure</a> ·
   <a href="#getting-started">Getting started</a> ·
+  <a href="#release">Release</a> ·
   <a href="#current-status">Current status</a> ·
   <a href="#what-preprocessing-now-does">Preprocessing</a> ·
   <a href="#evaluation-criteria">Evaluation criteria</a> ·
@@ -39,6 +40,12 @@
 - Research competition entry for an unsupervised, data-driven structural health score built from raw bridge measurements under the EWSHM Challenge 1 constraints
 - Python toolkit with implemented data access, preprocessing, feature-store generation, CLI workflows, and offline visualization for repeatable offline analysis
 - Current emphasis is robust preprocessing and feature extraction; training and global scoring remain intentionally stubbed while the run layout under `results/` is already reproducible
+
+## Release
+
+Current milestone release: [`v0.1.0`](https://github.com/likemaestro/EWSHM_Competition/releases/tag/v0.1.0)
+
+This release covers the implemented reader, preprocessing, feature extraction, CLI workflow, and offline visualization bundle. `training/` and `scoring/` remain stubs, so the repository is released as an early milestone rather than a complete end-to-end competition pipeline.
 
 ## The challenge
 
@@ -83,7 +90,7 @@ EWSHM_Competition/
 │   ├── io/                   Data I/O (AquinasReader)              [implemented]
 │   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
 │   ├── preprocessing/        Signal preprocessing                  [implemented]
-│   ├── feature_extraction/   Feature extraction (FDD)              [partial]
+│   ├── feature_extraction/   Feature extraction                    [implemented]
 │   ├── training/             Unsupervised anomaly models           [stub]
 │   ├── utils/                Shared utilities (plotting)           [implemented]
 │   ├── scoring/              Health score synthesis                [stub]
@@ -116,7 +123,7 @@ EWSHM_Competition/
 | `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess and features dispatch; train and score pending |
 | `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
 | `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering -> zeroing -> alignment pipeline with manifests and QC artifacts |
-| `aquinas_toolkit.feature_extraction` | Partial | FDD modal analysis (peak picking, mode shapes) implemented; time-domain features pending |
+| `aquinas_toolkit.feature_extraction` | Implemented | FDD modal analysis plus per-sensor waveform statistics and SQLite feature storage |
 | `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
 | `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
 
