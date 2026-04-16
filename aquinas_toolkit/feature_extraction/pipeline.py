@@ -345,27 +345,12 @@ def _build_modal_feature_rows(
             & (retained_events["deck"] == deck)
         ].copy()
         candidate_task = progress.add_task(
-            f"  Scanning {axis_label} candidates...",
-            total=len(event_rows.index),
+            f"  Checking retained events for complete {axis_label} coverage...",
+            total=max(len(event_rows.index), 1),
         )
-        selected_event_total = (
-            len(event_rows.index)
-            if settings.modal_analysis.max_events is None
-            else min(len(event_rows.index), settings.modal_analysis.max_events)
-        )
-        load_task = progress.add_task(
-            f"  Loading aligned {axis_label} events...",
-            total=max(selected_event_total, 1),
-        )
-        selected_event_count = 0
 
         def advance_candidate() -> None:
             progress.advance(candidate_task)
-
-        def advance_selected() -> None:
-            nonlocal selected_event_count
-            selected_event_count += 1
-            progress.advance(load_task)
 
         collect_start = perf_counter()
         collection = collect_preprocessed_event_matrices(
@@ -378,12 +363,9 @@ def _build_modal_feature_rows(
             max_events=settings.modal_analysis.max_events,
             require_full_channel_set=settings.modal_analysis.require_full_channel_set,
             on_candidate_event=advance_candidate,
-            on_selected_event=advance_selected,
         )
         timings["modal_collect_s"] += perf_counter() - collect_start
         progress.remove_task(candidate_task)
-        progress.update(load_task, total=max(selected_event_count, 1), completed=selected_event_count)
-        progress.remove_task(load_task)
         if not collection.aligned_events:
             progress.console.print(f"  [warning]skipped[/] {collection.detail}")
             family_status_rows.append(

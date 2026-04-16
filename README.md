@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Aquinas Toolkit" width="100%"/>
+  <img src="aquinas_toolkit/visualization/viewer_assets/logo.png" alt="Aquinas Toolkit" width="100%"/>
 </p>
 
 <h1 align="center">AQUINAS Toolkit — EWSHM 2026 Challenge</h1>

@@ -2,6 +2,7 @@ import json
 import sqlite3
 import sys
 import threading
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +13,12 @@ from aquinas_toolkit import AquinasReader
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.preprocessing import (
     LoadedEventGroup,
+    PreprocessWaveformMigrationWarning,
     align_event_group,
+    detect_legacy_preprocess_waveforms,
     find_events,
     load_event_group,
+    migrate_preprocess_waveforms,
     open_preprocess_store,
     run_organizer_query,
     synchro_indices,
@@ -85,6 +89,68 @@ def _fetch_table_names(db_path: Path) -> set[str]:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
     return {row[0] for row in rows}
+
+
+def _build_legacy_preprocess_waveform_layout(tmp_path: Path) -> tuple[Path, str, list[str], list[str], np.ndarray]:
+    from aquinas_toolkit.preprocessing.store import PreprocessStoreWriter  # noqa: PLC0415
+
+    preprocess_dir = tmp_path / "results" / "run-1" / "stages" / "preprocess"
+    event_id = "AQUINAS_SET1_2022_07__NEW__2022-07-01T00-00-00Z__2022-07-01T00-00-02Z"
+    timestamps = [
+        "2022-07-01T00:00:00Z",
+        "2022-07-01T00:00:01Z",
+    ]
+    sensor_names = ["NEW_S1_DO_INF_STR", "NEW_S1_DO_SUP_STR"]
+    matrix = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+
+    writer = PreprocessStoreWriter(
+        preprocess_dir,
+        run_id="run-1",
+        settings_payload={},
+        set_names=("AQUINAS_SET1_2022_07",),
+    )
+    writer.write_aligned_samples(
+        [],
+        events=pd.DataFrame(
+            [
+                {
+                    "event_id": event_id,
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "start_time_utc": "2022-07-01T00:00:00Z",
+                    "end_time_utc": "2022-07-01T00:00:02Z",
+                    "active_sensor_count": 2,
+                    "active_sensors": sensor_names,
+                    "excluded_sensor_count": 0,
+                    "excluded_sensors": [],
+                    "excluded_sensor_reasons": {},
+                    "reference_sensor": "NEW_S1_DO_INF_STR",
+                    "rows_before_alignment": 2,
+                    "rows_after_alignment": 2,
+                    "discarded": False,
+                    "discard_reason": "",
+                    "zeroing_method": "linear_endpoints",
+                }
+            ]
+        ),
+    )
+    writer.close()
+
+    waveforms_dir = preprocess_dir / "waveforms"
+    waveforms_dir.mkdir(parents=True, exist_ok=True)
+    np.save(waveforms_dir / f"{event_id}.npy", matrix)
+    (waveforms_dir / f"{event_id}.meta.json").write_text(
+        json.dumps(
+            {
+                "event_id": event_id,
+                "sensor_names": sensor_names,
+                "timestamps_utc": timestamps,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    return preprocess_dir, event_id, timestamps, sensor_names, matrix
 
 
 def _build_preprocessing_dataset(workspace: Path) -> Path:
@@ -788,8 +854,10 @@ def test_run_preprocess_writes_stage_artifacts(
     }
     assert not (preprocess_dir / "preprocess.sqlite").__class__.__name__ or True  # SQLite still exists
     waveforms_dir = preprocess_dir / "waveforms"
+    set_waveforms_dir = waveforms_dir / "AQUINAS_SET1_2022_07"
     assert waveforms_dir.is_dir(), "waveforms/ directory was not created"
-    assert any(waveforms_dir.glob("*.npy")), "no .npy waveform files were written"
+    assert set_waveforms_dir.is_dir(), "per-SET waveform subdirectory was not created"
+    assert any(waveforms_dir.glob("*/*.npy")), "no .npy waveform files were written"
     assert (
         preprocess_dir / "exports" / "aligned" / "AQUINAS_SET1_2022_07__NEW_DECK.csv.gz"
     ).is_file()
@@ -815,6 +883,119 @@ def test_run_preprocess_writes_stage_artifacts(
         "AQUINAS_SET1_2022_07__NEW_DECK",
         "AQUINAS_SET1_2022_07__OLD_DECK",
     }
+
+
+def test_migrate_preprocess_waveforms_moves_flat_artifacts_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    preprocess_dir, event_id, timestamps, sensor_names, matrix = _build_legacy_preprocess_waveform_layout(
+        tmp_path
+    )
+    waveforms_dir = preprocess_dir / "waveforms"
+
+    first_summary = migrate_preprocess_waveforms(preprocess_dir)
+
+    target_dir = waveforms_dir / "AQUINAS_SET1_2022_07"
+    target_npy = target_dir / f"{event_id}.npy"
+    target_meta = target_dir / f"{event_id}.meta.json"
+    assert first_summary == {"moved_events": 1, "already_migrated_events": 0}
+    assert target_npy.is_file()
+    assert target_meta.is_file()
+    assert not (waveforms_dir / f"{event_id}.npy").exists()
+    assert not (waveforms_dir / f"{event_id}.meta.json").exists()
+    np.testing.assert_array_equal(np.load(target_npy), matrix)
+
+    with open_preprocess_store(preprocess_dir) as store:
+        aligned = store.load_aligned_event(event_id)
+    assert aligned["timestamp_utc"].tolist() == list(pd.to_datetime(timestamps, utc=True))
+    np.testing.assert_allclose(aligned[sensor_names].to_numpy(), matrix)
+
+    second_summary = migrate_preprocess_waveforms(preprocess_dir)
+
+    assert second_summary == {"moved_events": 0, "already_migrated_events": 1}
+
+
+def test_detect_legacy_preprocess_waveforms_reports_flat_layout(tmp_path: Path) -> None:
+    preprocess_dir, event_id, _, _, _ = _build_legacy_preprocess_waveform_layout(tmp_path)
+
+    assert detect_legacy_preprocess_waveforms(preprocess_dir) is True
+
+    migrate_preprocess_waveforms(preprocess_dir)
+
+    assert detect_legacy_preprocess_waveforms(preprocess_dir) is False
+    assert (preprocess_dir / "waveforms" / "AQUINAS_SET1_2022_07" / f"{event_id}.npy").is_file()
+
+
+def test_detect_legacy_preprocess_waveforms_raises_for_conflicting_states(tmp_path: Path) -> None:
+    preprocess_dir, event_id, timestamps, sensor_names, matrix = _build_legacy_preprocess_waveform_layout(
+        tmp_path
+    )
+    target_dir = preprocess_dir / "waveforms" / "AQUINAS_SET1_2022_07"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    np.save(target_dir / f"{event_id}.npy", matrix)
+    (target_dir / f"{event_id}.meta.json").write_text(
+        json.dumps(
+            {
+                "event_id": event_id,
+                "sensor_names": sensor_names,
+                "timestamps_utc": timestamps,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileExistsError, match="Both flat and migrated artifacts exist"):
+        detect_legacy_preprocess_waveforms(preprocess_dir)
+
+
+def test_open_preprocess_store_auto_migrates_legacy_waveforms_and_warns(tmp_path: Path) -> None:
+    preprocess_dir, event_id, timestamps, sensor_names, matrix = _build_legacy_preprocess_waveform_layout(
+        tmp_path
+    )
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        with open_preprocess_store(preprocess_dir) as store:
+            aligned = store.load_aligned_event(event_id)
+
+    migration_warnings = [
+        warning
+        for warning in recorded
+        if issubclass(warning.category, PreprocessWaveformMigrationWarning)
+    ]
+    assert len(migration_warnings) == 1
+    assert "Legacy preprocess waveform layout detected" in str(migration_warnings[0].message)
+    assert "Do not quit until this move completes" in str(migration_warnings[0].message)
+
+    np.testing.assert_allclose(aligned[sensor_names].to_numpy(), matrix)
+    assert aligned["timestamp_utc"].tolist() == list(pd.to_datetime(timestamps, utc=True))
+    assert not (preprocess_dir / "waveforms" / f"{event_id}.npy").exists()
+    assert (preprocess_dir / "waveforms" / "AQUINAS_SET1_2022_07" / f"{event_id}.npy").is_file()
+
+    with warnings.catch_warnings(record=True) as recorded_second:
+        warnings.simplefilter("always")
+        with open_preprocess_store(preprocess_dir):
+            pass
+    assert not [
+        warning
+        for warning in recorded_second
+        if issubclass(warning.category, PreprocessWaveformMigrationWarning)
+    ]
+
+
+def test_scripts_migrate_preprocess_waveforms_main_prints_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts.migrate_preprocess_waveforms import main  # noqa: PLC0415
+
+    preprocess_dir, _, _, _, _ = _build_legacy_preprocess_waveform_layout(tmp_path)
+
+    exit_code = main([str(preprocess_dir)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Migration complete: 1 events moved, 0 already migrated." in captured.out
 
 
 def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report(

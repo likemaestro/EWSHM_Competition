@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -17,6 +18,10 @@ from aquinas_toolkit.preprocessing.core import _parse_timestamps_fast, collapse_
 
 PREPROCESS_DB_NAME = "preprocess.sqlite"
 PREPROCESS_SCHEMA_VERSION = 1
+
+
+class PreprocessWaveformMigrationWarning(UserWarning):
+    """Legacy preprocess waveform layout was detected and is being migrated."""
 
 EVENT_COLUMNS = [
     "event_id",
@@ -132,6 +137,119 @@ def preprocess_store_path(path_or_stage_dir: str | Path) -> Path:
     return path / PREPROCESS_DB_NAME
 
 
+def _waveform_artifact_paths(
+    waveforms_dir: Path,
+    event_id: str,
+    *,
+    set_name: str | None = None,
+) -> tuple[Path, Path]:
+    """Return the per-event waveform artifact paths under the per-SET layout."""
+    event_set_name = set_name if set_name is not None else str(event_id).split("__", 1)[0]
+    event_dir = waveforms_dir / event_set_name
+    return event_dir / f"{event_id}.npy", event_dir / f"{event_id}.meta.json"
+
+
+def _list_retained_events(db_path: Path) -> list[tuple[str, str]]:
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT event_id, set_name
+            FROM events
+            WHERE discarded = 0
+            ORDER BY set_name, deck, start_time_utc, event_id
+            """
+        ).fetchall()
+    return [(str(event_id), str(set_name)) for event_id, set_name in rows]
+
+
+def detect_legacy_preprocess_waveforms(path_or_stage_dir: str | Path) -> bool:
+    """Return whether retained-event waveform artifacts still use the flat legacy layout."""
+    db_path = preprocess_store_path(path_or_stage_dir)
+    if not db_path.is_file():
+        return False
+
+    waveforms_dir = db_path.parent / "waveforms"
+    legacy_detected = False
+
+    for event_id, set_name in _list_retained_events(db_path):
+        source_npy = waveforms_dir / f"{event_id}.npy"
+        source_meta = waveforms_dir / f"{event_id}.meta.json"
+        target_npy, target_meta = _waveform_artifact_paths(
+            waveforms_dir,
+            event_id,
+            set_name=set_name,
+        )
+
+        source_exists = (source_npy.exists(), source_meta.exists())
+        target_exists = (target_npy.exists(), target_meta.exists())
+
+        if any(src and dst for src, dst in zip(source_exists, target_exists, strict=True)):
+            raise FileExistsError(
+                f"Both flat and migrated artifacts exist for event {event_id}: "
+                f"{source_npy} / {target_npy}"
+            )
+        if all(source_exists) and not any(target_exists):
+            legacy_detected = True
+            continue
+        if all(target_exists) and not any(source_exists):
+            continue
+
+        raise FileNotFoundError(
+            f"Incomplete waveform artifact state for event {event_id}: "
+            f"flat={source_exists}, migrated={target_exists}"
+        )
+
+    return legacy_detected
+
+
+def migrate_preprocess_waveforms(path_or_stage_dir: str | Path) -> dict[str, int]:
+    """Move retained-event waveform artifacts into ``waveforms/<set_name>/``."""
+    db_path = preprocess_store_path(path_or_stage_dir)
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Preprocess store not found: {db_path}")
+
+    waveforms_dir = db_path.parent / "waveforms"
+    moved_events = 0
+    skipped_events = 0
+
+    for event_id, set_name in _list_retained_events(db_path):
+        source_npy = waveforms_dir / f"{event_id}.npy"
+        source_meta = waveforms_dir / f"{event_id}.meta.json"
+        target_npy, target_meta = _waveform_artifact_paths(
+            waveforms_dir,
+            event_id,
+            set_name=set_name,
+        )
+
+        source_exists = (source_npy.exists(), source_meta.exists())
+        target_exists = (target_npy.exists(), target_meta.exists())
+
+        if any(src and dst for src, dst in zip(source_exists, target_exists, strict=True)):
+            raise FileExistsError(
+                f"Both flat and migrated artifacts exist for event {event_id}: "
+                f"{source_npy} / {target_npy}"
+            )
+        if all(target_exists) and not any(source_exists):
+            skipped_events += 1
+            continue
+        if all(source_exists) and not any(target_exists):
+            target_npy.parent.mkdir(parents=True, exist_ok=True)
+            source_npy.rename(target_npy)
+            source_meta.rename(target_meta)
+            moved_events += 1
+            continue
+
+        raise FileNotFoundError(
+            f"Incomplete waveform artifact state for event {event_id}: "
+            f"flat={source_exists}, migrated={target_exists}"
+        )
+
+    return {
+        "moved_events": moved_events,
+        "already_migrated_events": skipped_events,
+    }
+
+
 class PreprocessStoreWriter:
     """Writer for the canonical preprocess SQLite artifact."""
 
@@ -165,7 +283,7 @@ class PreprocessStoreWriter:
 
     @property
     def waveforms_dir(self) -> Path:
-        """Directory where per-event .npy waveform files are stored."""
+        """Base directory where per-event .npy waveform files are stored by SET."""
         return self.path.parent / "waveforms"
 
     def build_aligned_samples_indexes(self) -> None:
@@ -237,8 +355,9 @@ class PreprocessStoreWriter:
 
         Each frame in ``frames`` is a wide DataFrame from ``aligned_event_to_long_frame()``
         with columns: event_id, sample_index, timestamp_utc, sensor1, sensor2, ...
-        The waveform matrix is saved as ``<event_id>.npy`` (float32, n_samples × n_sensors)
-        alongside ``<event_id>.meta.json`` (sensor_names list + timestamps list).
+        The waveform matrix is saved as ``<set_name>/<event_id>.npy`` (float32,
+        n_samples × n_sensors) alongside ``<set_name>/<event_id>.meta.json``
+        (sensor_names list + timestamps list).
 
         ``events`` and ``event_sensors`` rows are written to SQLite atomically.
         """
@@ -283,7 +402,7 @@ class PreprocessStoreReader:
 
     @property
     def waveforms_dir(self) -> Path:
-        """Directory where per-event .npy waveform files are stored."""
+        """Base directory where per-event .npy waveform files are stored by SET."""
         return self.path.parent / "waveforms"
 
     def load_stage_info(self) -> dict[str, Any]:
@@ -427,8 +546,7 @@ class PreprocessStoreReader:
         sensor_names: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         """Load one retained event as a wide aligned matrix from its numpy file."""
-        npy_path = self.waveforms_dir / f"{event_id}.npy"
-        meta_path = self.waveforms_dir / f"{event_id}.meta.json"
+        npy_path, meta_path = _waveform_artifact_paths(self.waveforms_dir, event_id)
 
         if not npy_path.is_file():
             ordered = list(sensor_names) if sensor_names is not None else []
@@ -474,8 +592,11 @@ class PreprocessStoreReader:
 
         for _, event_row in events.iterrows():
             eid = str(event_row["event_id"])
-            npy_path = self.waveforms_dir / f"{eid}.npy"
-            meta_path = self.waveforms_dir / f"{eid}.meta.json"
+            npy_path, meta_path = _waveform_artifact_paths(
+                self.waveforms_dir,
+                eid,
+                set_name=str(event_row["set_name"]),
+            )
             if not npy_path.is_file():
                 continue
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -821,6 +942,14 @@ def open_preprocess_store(path_or_stage_dir: str | Path) -> PreprocessStoreReade
     candidate_path = Path(path_or_stage_dir)
     sqlite_path = preprocess_store_path(candidate_path)
     if sqlite_path.is_file():
+        if detect_legacy_preprocess_waveforms(sqlite_path):
+            warnings.warn(
+                "Legacy preprocess waveform layout detected. Moving aligned waveform files into "
+                "the updated per-SET structure for compatibility. Do not quit until this move completes.",
+                PreprocessWaveformMigrationWarning,
+                stacklevel=2,
+            )
+            migrate_preprocess_waveforms(sqlite_path)
         return PreprocessStoreReader(sqlite_path)
 
     stage_dir = candidate_path if candidate_path.is_dir() else candidate_path.parent
@@ -1145,8 +1274,10 @@ def _write_waveform_npy(waveforms_dir: Path, frame: pd.DataFrame) -> None:
     event_id, sample_index, timestamp_utc, sensor1, sensor2, ...
 
     Saves:
-      <waveforms_dir>/<event_id>.npy         -- float32 matrix (n_samples x n_sensors)
-      <waveforms_dir>/<event_id>.meta.json   -- {"event_id", "sensor_names", "timestamps_utc"}
+      <waveforms_dir>/<set_name>/<event_id>.npy
+          -- float32 matrix (n_samples x n_sensors)
+      <waveforms_dir>/<set_name>/<event_id>.meta.json
+          -- {"event_id", "sensor_names", "timestamps_utc"}
     """
     if frame.empty:
         return
@@ -1154,12 +1285,11 @@ def _write_waveform_npy(waveforms_dir: Path, frame: pd.DataFrame) -> None:
     sensor_cols = [c for c in frame.columns if c not in ("event_id", "sample_index", "timestamp_utc")]
     matrix = frame[sensor_cols].to_numpy(dtype=np.float32)
     timestamps = frame["timestamp_utc"].tolist()
-    waveforms_dir.mkdir(parents=True, exist_ok=True)
-    np.save(waveforms_dir / f"{event_id}.npy", matrix)
+    npy_path, meta_path = _waveform_artifact_paths(waveforms_dir, event_id)
+    npy_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(npy_path, matrix)
     meta = {"event_id": event_id, "sensor_names": sensor_cols, "timestamps_utc": timestamps}
-    (waveforms_dir / f"{event_id}.meta.json").write_text(
-        json.dumps(meta, default=str), encoding="utf-8"
-    )
+    meta_path.write_text(json.dumps(meta, default=str), encoding="utf-8")
 
 
 def _prepare_sensor_records_frame(sensor_records: pd.DataFrame) -> pd.DataFrame:

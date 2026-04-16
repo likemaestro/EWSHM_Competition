@@ -21,6 +21,26 @@ class RichVizArgumentParser(argparse.ArgumentParser):
         terminal.print_viz_help()
 
     def error(self, message: str) -> None:
+        invalid_command = _extract_invalid_choice(message)
+        if invalid_command is not None:
+            choices = ("build", "open")
+            suggestion = terminal.suggest_typo(invalid_command, choices)
+            if suggestion is not None:
+                terminal.get_console().print(
+                    terminal.render_typo_hint(
+                        command_name=invalid_command,
+                        suggested_command=suggestion,
+                    )
+                )
+            terminal.print_error(message)
+            terminal.get_console().print(
+                terminal.render_compact_choice_hint(
+                    label="subcommands",
+                    choices=choices,
+                    help_command="aquinas viz --help",
+                )
+            )
+            raise SystemExit(2)
         terminal.print_error(message)
         terminal.print_viz_help()
         raise SystemExit(2)
@@ -74,6 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start the local viewer server without opening a browser tab.",
     )
     return parser
+
+
+def _extract_invalid_choice(message: str) -> str | None:
+    marker = "invalid choice: "
+    if marker not in message:
+        return None
+    try:
+        return message.split("'", 2)[1]
+    except IndexError:
+        return None
 
 
 def run() -> None:

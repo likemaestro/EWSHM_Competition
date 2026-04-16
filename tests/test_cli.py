@@ -49,6 +49,8 @@ def test_main_shows_usage_when_no_subcommand(
     captured = capsys.readouterr()
     assert "AQUINAS CLI" in captured.out
     assert "Usage: aquinas <command>" in captured.out
+    assert "run <stage>" in captured.out
+    assert "run preprocess" in captured.out
     assert "run" in captured.out
     assert "info" in captured.out
     assert "data" in captured.out
@@ -94,7 +96,9 @@ def test_main_fails_for_unknown_subcommand(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Unknown command: unknown" in captured.err
-    assert "AQUINAS CLI" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Use `aquinas --help` for full usage." in captured.out
+    assert "AQUINAS CLI" not in captured.out
 
 
 def test_main_typo_hint_for_info_command(
@@ -206,7 +210,9 @@ def test_main_does_not_hint_for_distant_unknown_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean" not in captured.out
-    assert "AQUINAS CLI" in captured.out
+    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Use `aquinas --help` for full usage." in captured.out
+    assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: spreadsheets" in captured.err
 
 
@@ -619,15 +625,102 @@ def test_run_invalid_stage_exits_2(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "bogus"])
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "featuresu"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "Today, typing is the worst.")
 
     with pytest.raises(SystemExit) as exc_info:
         run_mod.run()
 
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
+    assert "Did you mean `features`?" in captured.out
+    assert "Available stages: preprocess, features, train, score" in captured.out
+    assert "Use `aquinas run --help` for full usage." in captured.out
     assert "invalid choice" in captured.err
-    assert "AQUINAS RUN" in captured.out
+    assert "AQUINAS RUN" not in captured.out
+
+
+def test_data_invalid_subcommand_shows_typo_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "fetxh"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "Did I stutter?")
+
+    with pytest.raises(SystemExit) as exc_info:
+        data_mod.run()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `fetch`?" in captured.out
+    assert "Available subcommands: fetch, status, verify, path" in captured.out
+    assert "Use `aquinas data --help` for full usage." in captured.out
+    assert "invalid choice" in captured.err
+    assert "AQUINAS DATA" not in captured.out
+
+
+def test_data_single_letter_prefix_shows_typo_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aquinas_toolkit.cli import data as data_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "data", "f"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "Bears. Beets. Broken command.")
+
+    with pytest.raises(SystemExit) as exc_info:
+        data_mod.run()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `fetch`?" in captured.out
+    assert "Available subcommands: fetch, status, verify, path" in captured.out
+    assert "Use `aquinas data --help` for full usage." in captured.out
+    assert "invalid choice" in captured.err
+    assert "AQUINAS DATA" not in captured.out
+
+
+def test_viz_invalid_subcommand_shows_typo_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aquinas_toolkit.cli import viz as viz_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "viz", "biuld"])
+    monkeypatch.setattr(terminal, "_pick_typo_joke", lambda: "I declare command bankruptcy.")
+
+    with pytest.raises(SystemExit) as exc_info:
+        viz_mod.run()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean `build`?" in captured.out
+    assert "Available subcommands: build, open" in captured.out
+    assert "Use `aquinas viz --help` for full usage." in captured.out
+    assert "invalid choice" in captured.err
+    assert "AQUINAS VIZ" not in captured.out
+
+
+def test_viz_invalid_short_subcommand_shows_compact_hint_without_full_help(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aquinas_toolkit.cli import viz as viz_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "viz", "d"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        viz_mod.run()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Did you mean" not in captured.out
+    assert "Available subcommands: build, open" in captured.out
+    assert "Use `aquinas viz --help` for full usage." in captured.out
+    assert "invalid choice" in captured.err
+    assert "AQUINAS VIZ" not in captured.out
 
 
 def test_run_features_uses_latest_pointer_and_run_snapshot_config(

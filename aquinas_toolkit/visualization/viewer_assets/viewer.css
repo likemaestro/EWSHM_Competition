@@ -85,6 +85,14 @@ input {
   align-items: flex-start;
 }
 
+.brand-logo {
+  width: 160px;
+  max-width: min(32vw, 160px);
+  height: auto;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 .eyebrow {
   margin: 6px 0 0;
   font-size: 0.72rem;
@@ -673,6 +681,24 @@ select:focus {
   html,
   body {
     overflow: auto;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .brand {
+    flex-wrap: wrap;
+  }
+
+  .brand-logo {
+    width: 132px;
+    max-width: 40vw;
+  }
+
+  .topbar-controls {
+    justify-content: flex-start;
   }
 
   .scene-layout {

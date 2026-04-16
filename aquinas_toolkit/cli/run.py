@@ -57,6 +57,25 @@ class RichRunArgumentParser(argparse.ArgumentParser):
         terminal.print_run_help(STAGES)
 
     def error(self, message: str) -> None:
+        invalid_stage = _extract_invalid_choice(message)
+        if invalid_stage is not None:
+            suggestion = terminal.suggest_typo(invalid_stage, STAGES)
+            if suggestion is not None:
+                terminal.get_console().print(
+                    terminal.render_typo_hint(
+                        command_name=invalid_stage,
+                        suggested_command=suggestion,
+                    )
+                )
+            terminal.print_error(message)
+            terminal.get_console().print(
+                terminal.render_compact_choice_hint(
+                    label="stages",
+                    choices=STAGES,
+                    help_command="aquinas run --help",
+                )
+            )
+            raise SystemExit(2)
         terminal.print_error(message)
         terminal.print_run_help(STAGES)
         raise SystemExit(2)
@@ -88,6 +107,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print detailed timing breakdowns while still writing debug.log for every run.",
     )
     return parser
+
+
+def _extract_invalid_choice(message: str) -> str | None:
+    marker = "invalid choice: "
+    if marker not in message:
+        return None
+    try:
+        return message.split("'", 2)[1]
+    except IndexError:
+        return None
 
 
 def run() -> None:

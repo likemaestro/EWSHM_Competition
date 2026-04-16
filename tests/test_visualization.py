@@ -222,6 +222,8 @@ def test_build_visualization_artifacts_exports_bundle(
 
     index_html = (result.output_dir / "index.html").read_text(encoding="utf-8")
     viewer_css = (result.output_dir / "viewer.css").read_text(encoding="utf-8")
+    assert (result.output_dir / "logo.png").is_file()
+    assert "./logo.png" in index_html
     assert "3D View" in index_html
     assert "Sensor Analysis" in index_html
     assert "Datasets" in index_html

@@ -12,6 +12,9 @@ from aquinas_toolkit.preprocessing.pipeline import export_aligned_event, run_pre
 from aquinas_toolkit.preprocessing.store import (
     LegacyPreprocessCsvReader,
     PreprocessStoreReader,
+    PreprocessWaveformMigrationWarning,
+    detect_legacy_preprocess_waveforms,
+    migrate_preprocess_waveforms,
     open_preprocess_store,
 )
 from aquinas_toolkit.preprocessing.zeroing import (
@@ -36,7 +39,9 @@ __all__ = [
     "LoadedEventGroup",
     "LegacyPreprocessCsvReader",
     "OrganizerQueryResult",
+    "PreprocessWaveformMigrationWarning",
     "align_event_group",
+    "detect_legacy_preprocess_waveforms",
     "export_aligned_event",
     "find_events",
     "load_event_group",
@@ -45,6 +50,7 @@ __all__ = [
     "run_organizer_query",
     "open_preprocess_store",
     "PreprocessStoreReader",
+    "migrate_preprocess_waveforms",
     "synchro_indices",
     "zero_loaded_event_group",
     "zero_waveform",

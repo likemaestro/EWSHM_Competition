@@ -22,6 +22,26 @@ class RichDataArgumentParser(argparse.ArgumentParser):
         terminal.print_data_help()
 
     def error(self, message: str) -> None:
+        invalid_command = _extract_invalid_choice(message)
+        if invalid_command is not None:
+            choices = ("fetch", "status", "verify", "path")
+            suggestion = terminal.suggest_typo(invalid_command, choices)
+            if suggestion is not None:
+                terminal.get_console().print(
+                    terminal.render_typo_hint(
+                        command_name=invalid_command,
+                        suggested_command=suggestion,
+                    )
+                )
+            terminal.print_error(message)
+            terminal.get_console().print(
+                terminal.render_compact_choice_hint(
+                    label="subcommands",
+                    choices=choices,
+                    help_command="aquinas data --help",
+                )
+            )
+            raise SystemExit(2)
         terminal.print_error(message)
         terminal.print_data_help()
         raise SystemExit(2)
@@ -57,6 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("verify", add_help=False)
     subparsers.add_parser("path", add_help=False)
     return parser
+
+
+def _extract_invalid_choice(message: str) -> str | None:
+    marker = "invalid choice: "
+    if marker not in message:
+        return None
+    try:
+        return message.split("'", 2)[1]
+    except IndexError:
+        return None
 
 
 def run() -> None:

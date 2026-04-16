@@ -11,6 +11,12 @@ Partially implemented for v1.
 
 Current implemented scope:
 
+- Per-sensor per-event statistical features written to `features.sqlite`,
+  including waveform mean, std, RMS, min, max, peak-to-peak, energy,
+  crest factor, zero-crossing rate, skewness, and kurtosis
+- Index-table-derived context fields stored alongside those sensor-event
+  rows, including duration, start/end/diff/min/max/mean/range values,
+  and temperature
 - Frequency Domain Decomposition (FDD) for modal peak extraction from
   multichannel acceleration response data
 - Peak picking on the first singular-value curve inside a target band
@@ -21,20 +27,22 @@ Current implemented scope:
 
 Deferred beyond this pass:
 
-- Time-domain statistics (RMS, peak-to-peak, kurtosis, skewness,
-  crest factor, zero-crossing rate)
 - Frequency-domain features beyond FDD (dominant frequencies via FFT/PSD,
   spectral centroid, energy in frequency bands)
 - Cross-sensor features (correlation between co-located sensors)
-- Index-table features (the 15 pre-computed values already in the
-  TABLE JSON: Duration, Range, Mean_Value, Temperature, etc.)
 
 ## Interface
 
 - **Input:** filtered, zeroed, and aligned waveform DataFrames from the
   preprocessing stage (band-pass filtered, baseline-corrected,
   timestamp-synchronized)
-- **Output:** a feature matrix (rows = events, columns = named features)
+- **Output:** a SQLite-backed feature store rooted at `features.sqlite`.
+  The canonical tables are:
+  `sensor_event_features` (per-sensor per-event statistical features and
+  TABLE-derived context),
+  `deck_modal_peaks` (deck-level FDD peak summaries),
+  `deck_mode_shape_components` (per-sensor mode-shape components), and
+  `feature_family_status` (completed/skipped status per feature family).
 
 ## Stage Progress
 
@@ -42,7 +50,7 @@ Deferred beyond this pass:
 
 - loading preprocess artifacts
 - extracting per-sensor features across retained events
-- per `(set, deck)` modal analysis progress for the configured acceleration axis candidate scanning and aligned-event loading
+- per `(set, deck)` modal analysis progress while checking retained events for complete configured acceleration-axis coverage
 - configured-axis acceleration FDD execution (or a clear `skipped` reason when requirements are not met)
 - writing `features.sqlite`
 
@@ -86,10 +94,9 @@ The intended ownership split is:
   filtering, common-event loading, and the batch preprocess pipeline
 - `aquinas_toolkit.feature_extraction` derives modal and statistical
   features from the conditioned waveforms produced by preprocessing
-<!-- TODO: consider writing preprocessing output and feature vectors into a
-     SQLite database instead of CSV/CSV.GZ. Feature extraction, training, and
-     scoring all query the same data by event, sensor, set, and deck. Indexed
-     SQL lookups would be faster than scanning compressed CSVs on each stage. -->
+- `training` should consume the canonical feature store and may emit a
+  separate dense model-ready matrix artifact later if a specific
+  unsupervised method benefits from it
 
 ## Damaged-Sensor Constraint
 

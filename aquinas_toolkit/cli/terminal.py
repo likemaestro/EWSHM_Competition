@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 import os
 import random
 import sys
@@ -193,6 +194,27 @@ def print_data_path(dataset_root: Path) -> None:
     get_console().print(str(dataset_root))
 
 
+def suggest_typo(token: str, candidates: list[str] | tuple[str, ...]) -> str | None:
+    """Return a close command suggestion for obvious typos."""
+    prefix_matches = [candidate for candidate in candidates if candidate.startswith(token)]
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if len(token) < 2:
+        return None
+
+    matches = get_close_matches(token, list(candidates), n=2, cutoff=0.55)
+    if len(matches) != 1:
+        return None
+
+    candidate = matches[0]
+    max_distance = 1 if len(candidate) <= 3 else 2
+    if _is_single_adjacent_swap(token, candidate):
+        return candidate
+    if _edit_distance(token, candidate) > max_distance:
+        return None
+    return candidate
+
+
 def print_version_text(version_text: str) -> None:
     """Render the CLI version line."""
     get_console().print(f"aquinas {version_text}")
@@ -301,7 +323,10 @@ def render_top_level_help() -> CLIView:
     )
     commands.add_column("Command", style="key", no_wrap=True)
     commands.add_column("Description")
-    commands.add_row("run [stage]", "Run the full pipeline or a single stage.")
+    commands.add_row("run", "Create a new run and execute the full pipeline.")
+    commands.add_row("run <stage>", "Run one pipeline stage: preprocess, features, train, score.")
+    commands.add_row("run preprocess [--name NAME]", "Create a new run and execute preprocessing only.")
+    commands.add_row("run features [--run-id ID]", "Resume an existing run and extract features.")
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
     commands.add_row("data <subcommand>", "Download and manage the local dataset copy.")
     commands.add_row("viz <subcommand>", "Build or open the offline bridge viewer bundle.")
@@ -324,7 +349,10 @@ def render_top_level_help() -> CLIView:
     plain_text = (
         "Usage: aquinas <command> [options]\n\n"
         "Commands:\n"
-        "  run [stage]   Run the analysis pipeline (all stages, or a specific one).\n"
+        "  run           Create a new run and execute the full pipeline.\n"
+        "  run <stage>   Run one pipeline stage: preprocess, features, train, score.\n"
+        "  run preprocess [--name NAME]  Create a new run and execute preprocessing only.\n"
+        "  run features [--run-id ID]    Resume an existing run and extract features.\n"
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
         "  data <subcommand>  Download and manage the local dataset copy.\n"
         "  viz <subcommand>  Build or open the offline bridge viewer bundle.\n"
@@ -735,6 +763,20 @@ def render_compact_command_hint() -> CLIView:
     return CLIView(lines, plain_text)
 
 
+def render_compact_choice_hint(*, label: str, choices: list[str] | tuple[str, ...], help_command: str) -> CLIView:
+    """Build a compact fallback hint for typo-triggered nested CLI choices."""
+    choices_text = ", ".join(choices)
+    lines = Group(
+        Text(f"Available {label}: {choices_text}", style="key"),
+        Text(f"Use `{help_command}` for full usage.", style="muted"),
+    )
+    plain_text = (
+        f"Available {label}: {choices_text}\n"
+        f"Use `{help_command}` for full usage."
+    )
+    return CLIView(lines, plain_text)
+
+
 def render_viz_summary(
     *,
     run_id: str,
@@ -877,3 +919,46 @@ _TYPO_JOKES: tuple[str, ...] = (
     "You have no idea how high I can typo.",
     "I love inside jokes. I'd love to be part of one... with the right dataset.",
 )
+
+
+def _edit_distance(left: str, right: str) -> int:
+    """Compute a small Levenshtein distance for typo matching."""
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+
+    previous_row = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current_row = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            substitution_cost = 0 if left_char == right_char else 1
+            current_row.append(
+                min(
+                    previous_row[right_index] + 1,
+                    current_row[right_index - 1] + 1,
+                    previous_row[right_index - 1] + substitution_cost,
+                )
+            )
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
+def _is_single_adjacent_swap(left: str, right: str) -> bool:
+    """Return whether two strings differ by one adjacent transposition."""
+    if len(left) != len(right) or len(left) < 2:
+        return False
+
+    differences = [index for index, (lchar, rchar) in enumerate(zip(left, right)) if lchar != rchar]
+    if len(differences) != 2:
+        return False
+
+    first, second = differences
+    return (
+        second == first + 1
+        and left[first] == right[second]
+        and left[second] == right[first]
+    )
