@@ -437,6 +437,9 @@ def _build_modal_feature_rows(
                 {
                     "set_name": set_name,
                     "deck": deck,
+                    "feature_family": feature_family,
+                    "quantity": settings.modal_analysis.quantity,
+                    "axis": settings.modal_analysis.axis,
                     "peak_rank": peak_rank,
                     "frequency_hz": float(peak.frequency_hz),
                     "singular_value": float(peak.singular_value),

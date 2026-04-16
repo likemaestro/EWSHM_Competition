@@ -362,6 +362,9 @@ def test_run_features_creates_sqlite_feature_store_and_modal_outputs(
     assert set(sensor_features["deck"]) == {"NEW", "OLD"}
     assert not modal_peaks.empty
     assert set(modal_peaks["deck"]) == {"NEW"}
+    assert set(modal_peaks["feature_family"]) == {"acc_z_fdd"}
+    assert set(modal_peaks["quantity"]) == {"ACC"}
+    assert set(modal_peaks["axis"]) == {"Z"}
     assert not mode_shapes.empty
 
     new_status = family_status.loc[family_status["deck"] == "NEW"].iloc[0]
@@ -389,9 +392,14 @@ def test_run_features_cli_supports_axis_y_modal_analysis(
     features_dir = tmp_path / "results" / latest["run_id"] / "stages" / "features"
 
     with open_features_store(features_dir) as store:
+        modal_peaks = store.load_deck_modal_peaks()
         mode_shapes = store.load_deck_mode_shape_components()
         family_status = store.load_feature_family_status()
 
+    assert not modal_peaks.empty
+    assert set(modal_peaks["feature_family"]) == {"acc_y_fdd"}
+    assert set(modal_peaks["quantity"]) == {"ACC"}
+    assert set(modal_peaks["axis"]) == {"Y"}
     assert not mode_shapes.empty
     assert set(mode_shapes["axis"].dropna()) == {"Y"}
     assert set(mode_shapes["deck"]) == {"NEW"}

@@ -13,7 +13,7 @@ from aquinas_toolkit.preprocessing.store import _normalize_sql_value
 
 
 FEATURES_DB_NAME = "features.sqlite"
-FEATURES_SCHEMA_VERSION = 1
+FEATURES_SCHEMA_VERSION = 2
 
 SENSOR_EVENT_FEATURE_COLUMNS = [
     "event_id",
@@ -50,6 +50,9 @@ SENSOR_EVENT_FEATURE_COLUMNS = [
 DECK_MODAL_PEAK_COLUMNS = [
     "set_name",
     "deck",
+    "feature_family",
+    "quantity",
+    "axis",
     "peak_rank",
     "frequency_hz",
     "singular_value",
@@ -238,13 +241,16 @@ class FeaturesStoreWriter:
             CREATE TABLE deck_modal_peaks (
                 set_name TEXT NOT NULL,
                 deck TEXT NOT NULL,
+                feature_family TEXT NOT NULL,
+                quantity TEXT NOT NULL,
+                axis TEXT NOT NULL,
                 peak_rank INTEGER NOT NULL,
                 frequency_hz REAL NOT NULL,
                 singular_value REAL NOT NULL,
                 frequency_index INTEGER NOT NULL,
                 channel_count INTEGER NOT NULL,
                 event_count INTEGER NOT NULL,
-                PRIMARY KEY (set_name, deck, peak_rank)
+                PRIMARY KEY (set_name, deck, feature_family, peak_rank)
             );
 
             CREATE TABLE deck_mode_shape_components (
@@ -280,7 +286,7 @@ class FeaturesStoreWriter:
             CREATE INDEX idx_sensor_event_features_set_deck_sensor
                 ON sensor_event_features(set_name, deck, sensor_name);
             CREATE INDEX idx_deck_modal_peaks_set_deck
-                ON deck_modal_peaks(set_name, deck);
+                ON deck_modal_peaks(set_name, deck, feature_family);
             CREATE INDEX idx_feature_family_status_set_deck
                 ON feature_family_status(set_name, deck);
             """
@@ -322,7 +328,7 @@ class FeaturesStoreReader:
             """
             SELECT *
             FROM deck_modal_peaks
-            ORDER BY set_name, deck, peak_rank
+            ORDER BY set_name, deck, feature_family, peak_rank
             """,
             self.conn,
         )
