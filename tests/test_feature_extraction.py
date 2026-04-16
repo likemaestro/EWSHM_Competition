@@ -17,6 +17,7 @@ from aquinas_toolkit.feature_extraction import (
     open_features_store,
     annotate_mode_shape_locations,
     collect_preprocessed_event_matrices,
+    run_acc_fdd_from_preprocess_store,
     run_acc_z_fdd_from_preprocess_store,
     frequency_domain_decomposition,
     summarize_fdd_mode_shapes,
@@ -33,7 +34,7 @@ def _write_yaml(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _write_feature_pipeline_config(workspace: Path) -> None:
+def _write_feature_pipeline_config(workspace: Path, *, axis: str = "Z") -> None:
     config_dir = workspace / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
     _write_yaml(
@@ -63,7 +64,7 @@ def _write_feature_pipeline_config(workspace: Path) -> None:
             "  modal_analysis:",
             "    enabled: true",
             "    quantity: ACC",
-            "    axis: Z",
+            f"    axis: {axis}",
             "    min_common_events: 2",
             "    max_events: 5",
             "    require_full_channel_set: true",
@@ -117,6 +118,18 @@ def _build_feature_stage_dataset(workspace: Path) -> Path:
             0.65 * np.sin(2 * np.pi * 3.0 * time_axis - 0.1),
         ]
     )
+    new_acc_y_1 = np.concatenate(
+        [
+            0.9 * np.sin(2 * np.pi * 6.0 * time_axis + 0.2),
+            0.95 * np.sin(2 * np.pi * 6.0 * time_axis + 0.4),
+        ]
+    )
+    new_acc_y_2 = np.concatenate(
+        [
+            0.75 * np.sin(2 * np.pi * 6.0 * time_axis - 0.1),
+            0.8 * np.sin(2 * np.pi * 6.0 * time_axis + 0.1),
+        ]
+    )
 
     _write_sensor_with_two_events(
         set_dir,
@@ -134,6 +147,18 @@ def _build_feature_stage_dataset(workspace: Path) -> Path:
         set_dir,
         sensor_name="NEW_S1_DO_INF_STR",
         values=new_str.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="NEW_S1_DO_INT_ACC_Y",
+        values=new_acc_y_1.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="NEW_S2_DO_INT_ACC_Y",
+        values=new_acc_y_2.tolist(),
         timestamps=all_timestamps,
     )
     _write_sensor_with_two_events(
@@ -341,9 +366,43 @@ def test_run_features_creates_sqlite_feature_store_and_modal_outputs(
 
     new_status = family_status.loc[family_status["deck"] == "NEW"].iloc[0]
     old_status = family_status.loc[family_status["deck"] == "OLD"].iloc[0]
+    assert set(family_status["feature_family"]) == {"acc_z_fdd"}
     assert new_status["status"] == "completed"
     assert old_status["status"] == "skipped"
     assert "insufficient configured ACC_Z channels" in old_status["detail"]
+
+
+def test_run_features_cli_supports_axis_y_modal_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_feature_stage_dataset(tmp_path)
+    _write_feature_pipeline_config(tmp_path, axis="Y")
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "features"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    features_dir = tmp_path / "results" / latest["run_id"] / "stages" / "features"
+
+    with open_features_store(features_dir) as store:
+        mode_shapes = store.load_deck_mode_shape_components()
+        family_status = store.load_feature_family_status()
+
+    assert not mode_shapes.empty
+    assert set(mode_shapes["axis"].dropna()) == {"Y"}
+    assert set(mode_shapes["deck"]) == {"NEW"}
+    assert set(mode_shapes["sensor_name"]) == {"NEW_S1_DO_INT_ACC_Y", "NEW_S2_DO_INT_ACC_Y"}
+
+    new_status = family_status.loc[family_status["deck"] == "NEW"].iloc[0]
+    old_status = family_status.loc[family_status["deck"] == "OLD"].iloc[0]
+    assert set(family_status["feature_family"]) == {"acc_y_fdd"}
+    assert new_status["status"] == "completed"
+    assert old_status["status"] == "skipped"
+    assert "ACC_Y" in old_status["detail"]
 
 
 def test_run_features_prints_stage_progress_phases(
@@ -513,6 +572,28 @@ class _StubPreprocessStore:
                     "quantity": "ACC",
                     "axis": "Z",
                 },
+                {
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "sensor_name": "NEW_S1_DO_INT_ACC_Y",
+                    "sensor_order": 4,
+                    "span": "S1",
+                    "side": "DO",
+                    "location": "INT",
+                    "quantity": "ACC",
+                    "axis": "Y",
+                },
+                {
+                    "set_name": "AQUINAS_SET1_2022_07",
+                    "deck": "NEW",
+                    "sensor_name": "NEW_S2_DO_INT_ACC_Y",
+                    "sensor_order": 5,
+                    "span": "S2",
+                    "side": "DO",
+                    "location": "INT",
+                    "quantity": "ACC",
+                    "axis": "Y",
+                },
             ]
         )
         if set_name is not None:
@@ -531,11 +612,14 @@ class _StubPreprocessStore:
                 "NEW_S1_DO_INT_ACC_Z",
                 "NEW_S1_UP_INT_ACC_Z",
                 "NEW_S2_DO_INT_ACC_Z",
+                "NEW_S1_DO_INT_ACC_Y",
+                "NEW_S2_DO_INT_ACC_Y",
             ]
         else:
             sensor_names = [
                 "NEW_S1_DO_INT_ACC_Z",
                 "NEW_S1_UP_INT_ACC_Z",
+                "NEW_S1_DO_INT_ACC_Y",
             ]
         return pd.DataFrame(
             {
@@ -595,6 +679,34 @@ def test_collect_preprocessed_event_matrices_requires_full_channel_set_by_defaul
     assert strict.channel_names == strict.expected_channel_names
     assert permissive.available_events["event_id"].tolist() == ["evt_full", "evt_partial"]
     assert permissive.channel_names == ["NEW_S1_DO_INT_ACC_Z", "NEW_S1_UP_INT_ACC_Z"]
+
+
+def test_run_acc_fdd_from_preprocess_store_supports_acc_y() -> None:
+    store = _StubPreprocessStore()
+
+    summary = run_acc_fdd_from_preprocess_store(
+        store,
+        set_name="AQUINAS_SET1_2022_07",
+        deck="NEW",
+        axis="Y",
+        min_common_events=1,
+        max_events=5,
+        sampling_rate_hz=10.0,
+        low_hz=0.5,
+        high_hz=20.0,
+        nperseg=4,
+        noverlap=2,
+        n_peaks=1,
+    )
+
+    assert summary["axis"] == "Y"
+    assert summary["channel_names"] == [
+        "NEW_S1_DO_INT_ACC_Y",
+        "NEW_S2_DO_INT_ACC_Y",
+    ]
+    assert summary["channel_names"] == summary["expected_channel_names"]
+    assert len(summary["aligned_events"]) == 1
+    assert not summary["peak_table"].empty
 
 
 def test_run_features_can_read_legacy_preprocess_csv_artifacts_temporarily(
