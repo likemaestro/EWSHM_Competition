@@ -17,7 +17,7 @@ from aquinas_toolkit.feature_extraction.store import FeaturesStoreWriter, featur
 from aquinas_toolkit.io import parse_sensor_name
 from aquinas_toolkit.feature_extraction.workflow import (
     collect_preprocessed_event_matrices,
-    run_acc_z_fdd_from_event_matrices,
+    run_acc_fdd_from_event_matrices,
 )
 from aquinas_toolkit.preprocessing.store import (
     _to_optional_float,
@@ -30,7 +30,7 @@ from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir
 
 @dataclass(frozen=True)
 class ModalAnalysisSettings:
-    """Settings for the optional ACC_Z FDD feature family."""
+    """Settings for the optional acceleration FDD feature family."""
 
     enabled: bool = True
     quantity: str = "ACC"
@@ -185,8 +185,8 @@ def load_feature_settings(config_path: Path) -> FeatureSettings:
         sampling_rate_hz=float(features.get("sampling_rate_hz", 100.0)),
         modal_analysis=ModalAnalysisSettings(
             enabled=bool(modal_analysis.get("enabled", True)),
-            quantity=str(modal_analysis.get("quantity", "ACC")),
-            axis=str(modal_analysis.get("axis", "Z")),
+            quantity=str(modal_analysis.get("quantity", "ACC")).upper(),
+            axis=str(modal_analysis.get("axis", "Z")).upper(),
             min_common_events=int(modal_analysis.get("min_common_events", 2)),
             max_events=(
                 None
@@ -201,6 +201,14 @@ def load_feature_settings(config_path: Path) -> FeatureSettings:
             n_peaks=int(modal_analysis.get("n_peaks", 3)),
         ),
     )
+
+
+def _modal_axis_label(settings: ModalAnalysisSettings) -> str:
+    return f"{settings.quantity}_{settings.axis}"
+
+
+def _modal_feature_family(settings: ModalAnalysisSettings) -> str:
+    return f"{settings.quantity}_{settings.axis}_fdd".lower()
 
 
 def _build_sensor_event_feature_rows(
@@ -304,6 +312,8 @@ def _build_modal_feature_rows(
     family_status_rows: list[dict[str, Any]] = []
     peak_rows: list[dict[str, Any]] = []
     component_rows: list[dict[str, Any]] = []
+    axis_label = _modal_axis_label(settings.modal_analysis)
+    feature_family = _modal_feature_family(settings.modal_analysis)
 
     modal_targets = list(
         retained_events[["set_name", "deck"]]
@@ -321,7 +331,7 @@ def _build_modal_feature_rows(
                 {
                     "set_name": set_name,
                     "deck": deck,
-                    "feature_family": "acc_z_fdd",
+                    "feature_family": feature_family,
                     "status": "skipped",
                     "detail": "disabled in config",
                     "event_count": 0,
@@ -335,7 +345,7 @@ def _build_modal_feature_rows(
             & (retained_events["deck"] == deck)
         ].copy()
         candidate_task = progress.add_task(
-            "  Scanning ACC_Z candidates...",
+            f"  Scanning {axis_label} candidates...",
             total=len(event_rows.index),
         )
         selected_event_total = (
@@ -344,7 +354,7 @@ def _build_modal_feature_rows(
             else min(len(event_rows.index), settings.modal_analysis.max_events)
         )
         load_task = progress.add_task(
-            "  Loading aligned ACC_Z events...",
+            f"  Loading aligned {axis_label} events...",
             total=max(selected_event_total, 1),
         )
         selected_event_count = 0
@@ -380,7 +390,7 @@ def _build_modal_feature_rows(
                 {
                     "set_name": set_name,
                     "deck": deck,
-                    "feature_family": "acc_z_fdd",
+                    "feature_family": feature_family,
                     "status": "skipped",
                     "detail": collection.detail,
                     "event_count": len(event_rows),
@@ -389,10 +399,10 @@ def _build_modal_feature_rows(
             )
             continue
 
-        progress.console.print("  [accent]Running ACC_Z FDD...[/]")
-        fdd_task = progress.add_task("  Computing ACC_Z FDD summary...", total=None)
+        progress.console.print(f"  [accent]Running {axis_label} FDD...[/]")
+        fdd_task = progress.add_task(f"  Computing {axis_label} FDD summary...", total=None)
         fdd_start = perf_counter()
-        summary = run_acc_z_fdd_from_event_matrices(
+        summary = run_acc_fdd_from_event_matrices(
             collection.aligned_events,
             channel_names=collection.channel_names,
             sampling_rate_hz=settings.sampling_rate_hz,
@@ -415,7 +425,7 @@ def _build_modal_feature_rows(
             {
                 "set_name": set_name,
                 "deck": deck,
-                "feature_family": "acc_z_fdd",
+                "feature_family": feature_family,
                 "status": "completed",
                 "detail": f"computed from {len(collection.aligned_events)} retained events",
                 "event_count": len(collection.aligned_events),
@@ -427,6 +437,9 @@ def _build_modal_feature_rows(
                 {
                     "set_name": set_name,
                     "deck": deck,
+                    "feature_family": feature_family,
+                    "quantity": settings.modal_analysis.quantity,
+                    "axis": settings.modal_analysis.axis,
                     "peak_rank": peak_rank,
                     "frequency_hz": float(peak.frequency_hz),
                     "singular_value": float(peak.singular_value),

@@ -42,8 +42,8 @@ Deferred beyond this pass:
 
 - loading preprocess artifacts
 - extracting per-sensor features across retained events
-- per `(set, deck)` modal analysis progress for ACC_Z candidate scanning and aligned-event loading
-- ACC_Z FDD execution (or a clear `skipped` reason when requirements are not met)
+- per `(set, deck)` modal analysis progress for the configured acceleration axis candidate scanning and aligned-event loading
+- configured-axis acceleration FDD execution (or a clear `skipped` reason when requirements are not met)
 - writing `features.sqlite`
 
 This inner stage progress is displayed both when running `aquinas run features`

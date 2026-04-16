@@ -1,5 +1,5 @@
 """
-Notebook-facing helpers for the preserved ACC_Z FDD workflow.
+Notebook-facing helpers for the preserved acceleration FDD workflow.
 
 Original implementation by Mohsen Rezvani Alile.
 Adapted into reusable helpers from the feature-extraction notebook workflow.
@@ -340,6 +340,61 @@ def summarize_fdd_results(
     }
 
 
+def run_acc_fdd_workflow(
+    reader: AquinasReader,
+    *,
+    axis: str = "Z",
+    min_duration_seconds: float = 10.0,
+    deck: str | None = None,
+    max_events: int | None = 5,
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    filter_order: int = 4,
+    nperseg: int = 1024,
+    noverlap: int = 512,
+    n_peaks: int = 3,
+) -> dict[str, object]:
+    """Run the preserved acceleration filtered-event FDD workflow for one reader/deck."""
+    normalized_axis = axis.upper()
+    filtered = collect_filtered_event_matrices(
+        reader,
+        min_duration_seconds=min_duration_seconds,
+        quantity="ACC",
+        axis=normalized_axis,
+        deck=deck,
+        max_events=max_events,
+        sampling_rate_hz=sampling_rate_hz,
+        low_hz=low_hz,
+        high_hz=high_hz,
+        filter_order=filter_order,
+    )
+    if not filtered.filtered_events:
+        raise ValueError(f"No common filtered ACC_{normalized_axis} events were found for the requested workflow.")
+
+    summary = run_acc_fdd_from_event_matrices(
+        filtered.filtered_events,
+        channel_names=filtered.channel_names,
+        sampling_rate_hz=sampling_rate_hz,
+        low_hz=low_hz,
+        high_hz=high_hz,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        n_peaks=n_peaks,
+    )
+    summary.update(
+        {
+            "dataset": reader.set_name,
+            "deck": deck.upper() if deck is not None else "ALL",
+            "axis": normalized_axis,
+            "common_events": filtered.common_events,
+            "selected_events": filtered.selected_events,
+            "filtered_events": filtered.filtered_events,
+        }
+    )
+    return summary
+
+
 def run_acc_z_fdd_workflow(
     reader: AquinasReader,
     *,
@@ -355,24 +410,59 @@ def run_acc_z_fdd_workflow(
     n_peaks: int = 3,
 ) -> dict[str, object]:
     """Run the preserved ACC_Z filtered-event FDD workflow for one reader/deck."""
-    filtered = collect_filtered_event_matrices(
+    return run_acc_fdd_workflow(
         reader,
-        min_duration_seconds=min_duration_seconds,
-        quantity="ACC",
         axis="Z",
+        min_duration_seconds=min_duration_seconds,
         deck=deck,
         max_events=max_events,
         sampling_rate_hz=sampling_rate_hz,
         low_hz=low_hz,
         high_hz=high_hz,
         filter_order=filter_order,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        n_peaks=n_peaks,
     )
-    if not filtered.filtered_events:
-        raise ValueError("No common filtered events were found for the requested workflow.")
 
-    summary = run_acc_z_fdd_from_event_matrices(
-        filtered.filtered_events,
-        channel_names=filtered.channel_names,
+
+def run_acc_fdd_from_preprocess_store(
+    preprocess_store: Any,
+    *,
+    axis: str = "Z",
+    set_name: str | None = None,
+    deck: str | None = None,
+    min_common_events: int = 2,
+    max_events: int | None = 5,
+    require_full_channel_set: bool = True,
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    nperseg: int = 1024,
+    noverlap: int = 512,
+    n_peaks: int = 3,
+) -> dict[str, object]:
+    """Run the preserved acceleration FDD workflow from preprocess-stage artifacts."""
+    normalized_axis = axis.upper()
+    collection = collect_preprocessed_event_matrices(
+        preprocess_store,
+        set_name=set_name,
+        deck=deck,
+        quantity="ACC",
+        axis=normalized_axis,
+        min_common_events=min_common_events,
+        max_events=max_events,
+        require_full_channel_set=require_full_channel_set,
+    )
+    if not collection.aligned_events:
+        raise ValueError(
+            collection.detail
+            or f"No common aligned ACC_{normalized_axis} events were found in preprocess outputs."
+        )
+
+    summary = run_acc_fdd_from_event_matrices(
+        collection.aligned_events,
+        channel_names=collection.channel_names,
         sampling_rate_hz=sampling_rate_hz,
         low_hz=low_hz,
         high_hz=high_hz,
@@ -382,11 +472,14 @@ def run_acc_z_fdd_workflow(
     )
     summary.update(
         {
-            "dataset": reader.set_name,
+            "dataset": set_name if set_name is not None else "ALL",
             "deck": deck.upper() if deck is not None else "ALL",
-            "common_events": filtered.common_events,
-            "selected_events": filtered.selected_events,
-            "filtered_events": filtered.filtered_events,
+            "axis": normalized_axis,
+            "available_events": collection.available_events,
+            "selected_events": collection.selected_events,
+            "aligned_events": collection.aligned_events,
+            "expected_channel_names": collection.expected_channel_names,
+            "detail": collection.detail,
         }
     )
     return summary
@@ -408,22 +501,14 @@ def run_acc_z_fdd_from_preprocess_store(
     n_peaks: int = 3,
 ) -> dict[str, object]:
     """Run the preserved ACC_Z FDD workflow from preprocess-stage artifacts."""
-    collection = collect_preprocessed_event_matrices(
+    return run_acc_fdd_from_preprocess_store(
         preprocess_store,
+        axis="Z",
         set_name=set_name,
         deck=deck,
-        quantity="ACC",
-        axis="Z",
         min_common_events=min_common_events,
         max_events=max_events,
         require_full_channel_set=require_full_channel_set,
-    )
-    if not collection.aligned_events:
-        raise ValueError(collection.detail or "No common aligned ACC_Z events were found in preprocess outputs.")
-
-    summary = run_acc_z_fdd_from_event_matrices(
-        collection.aligned_events,
-        channel_names=collection.channel_names,
         sampling_rate_hz=sampling_rate_hz,
         low_hz=low_hz,
         high_hz=high_hz,
@@ -431,18 +516,6 @@ def run_acc_z_fdd_from_preprocess_store(
         noverlap=noverlap,
         n_peaks=n_peaks,
     )
-    summary.update(
-        {
-            "dataset": set_name if set_name is not None else "ALL",
-            "deck": deck.upper() if deck is not None else "ALL",
-            "available_events": collection.available_events,
-            "selected_events": collection.selected_events,
-            "aligned_events": collection.aligned_events,
-            "expected_channel_names": collection.expected_channel_names,
-            "detail": collection.detail,
-        }
-    )
-    return summary
 
 
 def _list_expected_channel_names(
@@ -469,6 +542,32 @@ def _list_expected_channel_names(
     return ordered["sensor_name"].astype(str).tolist()
 
 
+def run_acc_fdd_from_event_matrices(
+    waveform_matrices: Sequence[pd.DataFrame | np.ndarray],
+    *,
+    channel_names: Sequence[str],
+    sampling_rate_hz: float = 100.0,
+    low_hz: float = 0.5,
+    high_hz: float = 20.0,
+    nperseg: int = 1024,
+    noverlap: int = 512,
+    n_peaks: int = 3,
+) -> dict[str, object]:
+    """Run the notebook-preserved acceleration FDD summary on prepared waveform matrices."""
+    fdd_result = frequency_domain_decomposition(
+        waveform_matrices,
+        sampling_rate_hz=sampling_rate_hz,
+        nperseg=nperseg,
+        noverlap=noverlap,
+    )
+    return summarize_fdd_results(
+        fdd_result,
+        channel_names=channel_names,
+        frequency_band_hz=(low_hz, high_hz),
+        n_peaks=n_peaks,
+    )
+
+
 def run_acc_z_fdd_from_event_matrices(
     waveform_matrices: Sequence[pd.DataFrame | np.ndarray],
     *,
@@ -481,16 +580,14 @@ def run_acc_z_fdd_from_event_matrices(
     n_peaks: int = 3,
 ) -> dict[str, object]:
     """Run the notebook-preserved ACC_Z FDD summary on prepared waveform matrices."""
-    fdd_result = frequency_domain_decomposition(
+    return run_acc_fdd_from_event_matrices(
         waveform_matrices,
+        channel_names=channel_names,
         sampling_rate_hz=sampling_rate_hz,
+        low_hz=low_hz,
+        high_hz=high_hz,
         nperseg=nperseg,
         noverlap=noverlap,
-    )
-    return summarize_fdd_results(
-        fdd_result,
-        channel_names=channel_names,
-        frequency_band_hz=(low_hz, high_hz),
         n_peaks=n_peaks,
     )
 
