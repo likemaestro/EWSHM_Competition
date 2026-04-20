@@ -17,8 +17,8 @@ const COLOR = {
   groundText: 0x7b8da7,
 };
 
-const CAM_DEFAULT = { x: 20, y: 14, z: -25 };
-const CAM_TARGET = { x: 45, y: 1.5, z: 0 };
+const CAM_DEFAULT = { x: 24, y: 12.5, z: -34 };
+const CAM_TARGET = { x: 45, y: -1.2, z: 0 };
 const GROUND_Y = -18;
 const GRID_SIZE = 150;
 const GRID_MINOR_STEP = 5;
@@ -42,6 +42,7 @@ const state = {
   family: "ALL",
   viewMode: "exploded",
   compareMode: "single",
+  wireframe: false,
   showCorrelations: false,
   selectedSensorId: null,
   isolatedSensorId: null,
@@ -59,15 +60,21 @@ const state = {
 let renderer, scene, camera, controls, raycaster, pointer;
 const deckGroups = {};
 const pierGroups = {};
+const deckMaterials = [];
+const deckEdgeMaterials = [];
 const sensorObjs = new Map();
 const pickTargets = [];
 let hoveredId = null;
+let minorGrid;
+let majorGrid;
+let selectionLight = null;
 
 const el = {
   datasetSelect: document.getElementById("dataset-select"),
   metricSelect: document.getElementById("metric-select"),
   familyToggle: document.getElementById("family-toggle"),
   compareMode: document.getElementById("compare-mode"),
+  wireframeToggle: document.getElementById("wireframe-toggle"),
   corrToggle: document.getElementById("correlation-toggle"),
   filterGroups: document.getElementById("filter-groups"),
   resetFilters: document.getElementById("reset-filters"),
@@ -175,6 +182,7 @@ function buildControls() {
   renderSegmented(el.familyToggle, ["ALL", "ACC", "STR"], state.family, (value) => {
     state.family = value;
     reconcileSelection();
+    buildFilterControls();
     render();
   });
 
@@ -205,7 +213,6 @@ function buildFilterControls() {
       const options = values
         .map((value) => {
           const checked = selected.size === 0 || selected.has(value) ? "checked" : "";
-          const title = name === "axis_or_fibre" ? "Axis / fibre" : capitalize(name);
           return `<label>
             <input type="checkbox" data-filter-group="${name}" value="${value}" ${checked} />
             <span>${value}</span>
@@ -237,6 +244,12 @@ function buildDatasetStrip() {
     .join("");
 }
 
+function syncDatasetStrip() {
+  el.datasetStrip.querySelectorAll("[data-dataset-button]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.datasetButton === state.selectedDataset);
+  });
+}
+
 function bindStaticEvents() {
   el.datasetSelect.addEventListener("change", (event) => {
     state.selectedDataset = event.target.value;
@@ -250,6 +263,12 @@ function bindStaticEvents() {
 
   el.compareMode.addEventListener("change", (event) => {
     state.compareMode = event.target.value;
+    render();
+  });
+
+  el.wireframeToggle.addEventListener("change", (event) => {
+    state.wireframe = event.target.checked;
+    applyWireframeMode();
     render();
   });
 
@@ -313,34 +332,35 @@ function setActiveTab(tabId) {
     panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
   }
   if (tabId === "scene") {
-    requestAnimationFrame(onResize);
+    requestAnimationFrame(() => requestAnimationFrame(onResize));
   }
 }
 
 function render() {
-  buildFilterControls();
-  buildDatasetStrip();
-  updateHeader();
+  const visibleSensors = getVisibleSensors();
+  syncDatasetStrip();
+  updateHeader(visibleSensors);
   updateSceneSelection();
-  updateSensorGlyphs();
+  updateSensorGlyphs(visibleSensors);
   renderInspector();
 }
 
-function updateHeader() {
+function updateHeader(visibleSensors) {
   const dataset = state.manifest.available_datasets.find(
     (item) => item.dataset === state.selectedDataset
   );
-  const visible = getVisibleSensors();
+  const datasetLabel = dataset ? dataset.label : state.selectedDataset;
+  const metricLabel = labelForMetric(state.selectedMetric);
 
-  el.stageTitle.textContent = `${dataset ? dataset.label : state.selectedDataset} · ${labelForMetric(state.selectedMetric)}`;
-  el.stageSub.textContent = "Metric-scaled analytical view with mount-aware sensor placement.";
+  el.stageTitle.textContent = datasetLabel;
+  el.stageSub.textContent = `${metricLabel} · analytical placement view`;
   el.analysisSub.textContent = state.selectedSensorId
     ? `Detailed view for ${state.selectedSensorId}.`
     : "Select a marker in the 3D view to inspect the sensor in detail.";
 
   el.statusStrip.innerHTML = [
-    `${visible.length} sensors`,
-    `${state.family} family`,
+    `${visibleSensors.length} shown`,
+    state.family,
     state.selectedSensorId ? "Selection active" : "No selection",
   ]
     .map((text) => `<span class="status-pill">${text}</span>`)
@@ -351,12 +371,9 @@ function updateSceneSelection() {
   const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
   if (!sensor) {
     el.sceneSelection.innerHTML = `
-      <div class="card">
-        <h3>No sensor selected</h3>
-        <p class="card-note">
-          Click any marker in the scene to pin a sensor, then open the analysis tab for trends,
-          homologous comparison, and waveform context.
-        </p>
+      <div class="card selection-card compact-empty">
+        <span class="selection-kicker">Scene focus</span>
+        <div class="selection-compact-text">Click a marker to inspect one sensor.</div>
       </div>`;
     return;
   }
@@ -365,34 +382,36 @@ function updateSceneSelection() {
   const local = sensor.local_position;
 
   el.sceneSelection.innerHTML = `
-    <div class="card">
-      <h3>${sensor.sensor_id}</h3>
-      <div class="metric-value">${formatMetric(metric)}</div>
-      <p class="card-note">${labelForMetric(state.selectedMetric)} · ${metric?.unit ?? "n/a"}</p>
-    </div>
-    <div class="card">
-      <h3>Mounted at</h3>
-      <div class="meta-grid">
+    <div class="card selection-card">
+      <div class="selection-head">
+        <span class="selection-kicker">${sensor.deck} · ${sensor.span}_${sensor.section}</span>
+        <h3>${sensor.sensor_id}</h3>
+        <div class="metric-value">${formatMetric(metric)}</div>
+        <p class="card-note">${labelForMetric(state.selectedMetric)} · ${metric?.unit ?? "n/a"}</p>
+      </div>
+      <div class="selection-meta">
+        <div class="selection-meta-grid">
         ${metaRow("Deck", sensor.deck)}
         ${metaRow("Span", sensor.span)}
         ${metaRow("Side", sensor.side)}
         ${metaRow("Surface", humanizeSurface(sensor.mount_surface))}
         ${metaRow("Local X", `${formatNumeric(meters(local.x))} m`)}
         ${metaRow("Local Y", `${formatNumeric(meters(local.y))} m`)}
+        </div>
+        <button class="ghost-button selection-action" type="button" data-open-analysis>Open analysis</button>
       </div>
-    </div>
-    <button class="ghost-button" type="button" data-open-analysis>Open analysis</button>`;
+    </div>`;
 }
 
 function initThree() {
   renderer = new THREE.WebGLRenderer({ canvas: el.canvas, antialias: true, alpha: false });
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setClearColor(0xf7f8fb, 1);
+  renderer.setClearColor(0xf4f7fb, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xf7f8fb, 65, 180);
+  scene.fog = new THREE.Fog(0xf4f7fb, 80, 220);
 
   camera = new THREE.PerspectiveCamera(38, 1, 0.1, 350);
   camera.position.set(CAM_DEFAULT.x, CAM_DEFAULT.y, CAM_DEFAULT.z);
@@ -427,9 +446,13 @@ function initThree() {
   fill.position.set(-36, 26, -52);
   scene.add(fill);
 
+  const backFill = new THREE.DirectionalLight(0xfff0d0, 0.22);
+  backFill.position.set(-20, -6, 55);
+  scene.add(backFill);
+
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(220, 160),
-    new THREE.ShadowMaterial({ opacity: 0.09 })
+    new THREE.ShadowMaterial({ opacity: 0.06 })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(45, GROUND_Y, 0);
@@ -457,7 +480,7 @@ function animate() {
 }
 
 function onResize() {
-  const width = el.sceneWrap.clientWidth;
+  const width = el.sceneWrap.clientWidth || 800;
   const height = el.sceneWrap.clientHeight || 480;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
@@ -481,18 +504,18 @@ function addGroundContext() {
   const minorDivisions = GRID_SIZE / GRID_MINOR_STEP;
   const majorDivisions = GRID_SIZE / GRID_MAJOR_STEP;
 
-  const minorGrid = new THREE.GridHelper(GRID_SIZE, minorDivisions, COLOR.gridMinor, COLOR.gridMinor);
+  minorGrid = new THREE.GridHelper(GRID_SIZE, minorDivisions, COLOR.gridMinor, COLOR.gridMinor);
   minorGrid.position.set(45, GROUND_Y + 0.01, 0);
-  setHelperOpacity(minorGrid, 0.18);
+  setHelperOpacity(minorGrid, 0.14);
   scene.add(minorGrid);
 
-  const majorGrid = new THREE.GridHelper(GRID_SIZE, majorDivisions, COLOR.gridMajor, COLOR.gridMajor);
+  majorGrid = new THREE.GridHelper(GRID_SIZE, majorDivisions, COLOR.gridMajor, COLOR.gridMajor);
   majorGrid.position.set(45, GROUND_Y + 0.02, 0);
-  setHelperOpacity(majorGrid, 0.28);
+  setHelperOpacity(majorGrid, 0.22);
   scene.add(majorGrid);
 
   const tickGroup = new THREE.Group();
-  const tickMaterial = new THREE.LineBasicMaterial({ color: COLOR.gridMajor, transparent: true, opacity: 0.45 });
+  const tickMaterial = new THREE.LineBasicMaterial({ color: COLOR.gridMajor, transparent: true, opacity: 0.32 });
   for (let value = 0; value <= 90; value += GRID_MAJOR_STEP) {
     const geometry = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(value, GROUND_Y + 0.02, 18),
@@ -504,7 +527,7 @@ function addGroundContext() {
       height: 1.3,
       fontSize: 44,
       color: "#74849a",
-      opacity: 0.78,
+      opacity: 0.7,
       position: new THREE.Vector3(value, GROUND_Y + 0.04, 22),
     }));
   }
@@ -514,7 +537,7 @@ function addGroundContext() {
     height: 1.6,
     fontSize: 52,
     color: "#8da0b8",
-    opacity: 0.52,
+    opacity: 0.42,
     position: new THREE.Vector3(22.5, GROUND_Y + 0.04, 15.5),
   }));
   tickGroup.add(createGroundText("Span 2", {
@@ -522,7 +545,7 @@ function addGroundContext() {
     height: 1.6,
     fontSize: 52,
     color: "#8da0b8",
-    opacity: 0.52,
+    opacity: 0.42,
     position: new THREE.Vector3(67.5, GROUND_Y + 0.04, 15.5),
   }));
   scene.add(tickGroup);
@@ -569,6 +592,7 @@ function buildDecks() {
         transparent: true,
         opacity: 0.78,
       });
+      deckMaterials.push({ material: slabMaterial, opacity: 0.78 });
       const webMaterial = new THREE.MeshStandardMaterial({
         color: webColor,
         roughness: 0.9,
@@ -577,6 +601,7 @@ function buildDecks() {
         opacity: 0.74,
         side: THREE.DoubleSide,
       });
+      deckMaterials.push({ material: webMaterial, opacity: 0.74 });
 
       const topSlab = new THREE.Mesh(
         new THREE.BoxGeometry(length, slabThickness, topWidth),
@@ -728,33 +753,77 @@ function addDirectionLabels() {
 }
 
 function addEdgeOverlay(geometry, position, rotation, parent) {
+  const material = new THREE.LineBasicMaterial({
+    color: COLOR.deckEdge,
+    transparent: true,
+    opacity: 0.32,
+  });
+  deckEdgeMaterials.push({ material, opacity: 0.32 });
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry, 18),
-    new THREE.LineBasicMaterial({
-      color: COLOR.deckEdge,
-      transparent: true,
-      opacity: 0.32,
-    })
+    material
   );
   edges.position.copy(position);
   edges.rotation.copy(rotation);
   parent.add(edges);
 }
 
-function createTextCanvas(text, { width = 512, height = 128, fontSize = 48, color = "#102c53", opacity = 1 }) {
+function createTextCanvas(
+  text,
+  {
+    width = 512,
+    height = 128,
+    fontSize = 48,
+    color = "#102c53",
+    opacity = 1,
+    backgroundColor = null,
+    borderColor = null,
+    radius = 0,
+    paddingX = 0,
+  }
+) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
 
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, width, height);
+
+  if (backgroundColor) {
+    context.globalAlpha = opacity;
+    context.fillStyle = backgroundColor;
+    drawRoundedRect(context, 0, 0, width, height, radius);
+    context.fill();
+
+    if (borderColor) {
+      context.strokeStyle = borderColor;
+      context.lineWidth = 4;
+      context.stroke();
+    }
+  }
+
   context.globalAlpha = opacity;
   context.font = `800 ${fontSize}px Manrope`;
   context.fillStyle = color;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, width / 2, height / 2);
+  context.fillText(text, width / 2, height / 2, width - (paddingX * 2));
   return canvas;
+}
+
+function drawRoundedRect(context, x, y, width, height, radius) {
+  const limited = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + limited, y);
+  context.lineTo(x + width - limited, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + limited);
+  context.lineTo(x + width, y + height - limited);
+  context.quadraticCurveTo(x + width, y + height, x + width - limited, y + height);
+  context.lineTo(x + limited, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - limited);
+  context.lineTo(x, y + limited);
+  context.quadraticCurveTo(x, y, x + limited, y);
+  context.closePath();
 }
 
 function setHelperOpacity(helper, opacity) {
@@ -763,15 +832,6 @@ function setHelperOpacity(helper, opacity) {
     material.transparent = true;
     material.opacity = opacity;
   }
-}
-
-function createBillboardLabel(text, { width, height, fontSize, color }) {
-  const texture = new THREE.CanvasTexture(createTextCanvas(text, { fontSize, color }));
-  texture.needsUpdate = true;
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(width, height, 1);
-  return sprite;
 }
 
 function createGroundText(text, { width, height, fontSize, color, opacity, position }) {
@@ -789,11 +849,15 @@ function createGroundText(text, { width, height, fontSize, color, opacity, posit
 }
 
 
-function updateSensorGlyphs() {
-  const visible = new Set(getVisibleSensors().map((sensor) => sensor.sensor_id));
+function updateSensorGlyphs(visibleSensors) {
+  const visible = new Set(visibleSensors.map((sensor) => sensor.sensor_id));
 
   for (const [sensorId, object] of sensorObjs) {
     if (!visible.has(sensorId)) {
+      if (selectionLight && selectionLight.parent === object.group) {
+        object.group.remove(selectionLight);
+        selectionLight = null;
+      }
       scene.remove(object.group);
       sensorObjs.delete(sensorId);
       const index = pickTargets.indexOf(object.pickMesh);
@@ -801,7 +865,7 @@ function updateSensorGlyphs() {
     }
   }
 
-  for (const sensor of getVisibleSensors()) {
+  for (const sensor of visibleSensors) {
     const metric = getMetric(sensor.sensor_id);
     const isSelected = sensor.sensor_id === state.selectedSensorId;
     const isHigh = metric?.status_band === "high";
@@ -815,7 +879,13 @@ function updateSensorGlyphs() {
         mesh.material.emissive?.setHex(isSelected ? 0x143763 : 0x000000);
         mesh.material.opacity = isLow ? 0.34 : 1.0;
       }
-      object.group.scale.setScalar(isSelected ? 1.18 : sensor.sensor_id === hoveredId ? 1.08 : 1.0);
+      const baseScale = state.wireframe ? 1.4 : 1.0;
+      object.group.scale.setScalar(
+        isSelected ? baseScale * 1.18 : sensor.sensor_id === hoveredId ? baseScale * 1.08 : baseScale
+      );
+      if (object.group.userData.labelSprite) {
+        object.group.userData.labelSprite.visible = state.wireframe;
+      }
     } else {
       const group = buildGlyph(sensor, metric, isSelected);
       const local = sensor.local_position;
@@ -841,6 +911,8 @@ function updateSensorGlyphs() {
       });
     }
   }
+
+  syncSelectionLight();
 }
 
 function glyphColor(sensor, isHigh, isSelected) {
@@ -854,10 +926,12 @@ function buildGlyph(sensor, metric, isSelected) {
   const meshes = [];
   const isHigh = metric?.status_band === "high";
 
-  const material = () => new THREE.MeshStandardMaterial({
+  const material = () => new THREE.MeshPhysicalMaterial({
     color: glyphColor(sensor, isHigh, isSelected),
-    roughness: 0.32,
-    metalness: 0.12,
+    roughness: 0.28,
+    metalness: 0.08,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.18,
     emissive: isSelected ? new THREE.Color(0x143763) : new THREE.Color(0x000000),
     transparent: true,
     opacity: metric?.status_band === "low" ? 0.34 : 1.0,
@@ -906,10 +980,39 @@ function buildGlyph(sensor, metric, isSelected) {
     group.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), targetAxis);
   }
 
+  const labelTexture = new THREE.CanvasTexture(
+    createTextCanvas(sensor.section, {
+      width: 360,
+      height: 96,
+      fontSize: 40,
+      color: "#102c53",
+      backgroundColor: "#ffffff",
+      borderColor: "#d8e0ea",
+      radius: 44,
+      paddingX: 24,
+    })
+  );
+  labelTexture.needsUpdate = true;
+  const labelSprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: labelTexture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    })
+  );
+  labelSprite.scale.set(4.5, 1.2, 1);
+  labelSprite.position.set(0, 1.45, 0);
+  labelSprite.visible = false;
+  group.add(labelSprite);
+
   group.userData.coloredMeshes = meshes;
+  group.userData.labelSprite = labelSprite;
   for (const mesh of meshes) {
     mesh.castShadow = true;
   }
+  const baseScale = state.wireframe ? 1.4 : 1.0;
+  group.scale.setScalar(isSelected ? baseScale * 1.18 : baseScale);
   return group;
 }
 
@@ -940,14 +1043,15 @@ function raycastSensor(event) {
 
 function onPointerMove(event) {
   const sensorId = raycastSensor(event);
+  const baseScale = state.wireframe ? 1.4 : 1.0;
   if (sensorId !== hoveredId) {
     if (hoveredId && sensorObjs.has(hoveredId)) {
       const object = sensorObjs.get(hoveredId);
-      object.group.scale.setScalar(hoveredId === state.selectedSensorId ? 1.18 : 1.0);
+      object.group.scale.setScalar(hoveredId === state.selectedSensorId ? baseScale * 1.18 : baseScale);
     }
     hoveredId = sensorId;
     if (hoveredId && sensorObjs.has(hoveredId) && hoveredId !== state.selectedSensorId) {
-      sensorObjs.get(hoveredId).group.scale.setScalar(1.08);
+      sensorObjs.get(hoveredId).group.scale.setScalar(baseScale * 1.08);
     }
   }
 
@@ -970,7 +1074,13 @@ function onPointerMove(event) {
 
 function onCanvasClick(event) {
   const sensorId = raycastSensor(event);
-  if (!sensorId) return;
+  if (!sensorId) {
+    state.selectedSensorId = null;
+    state.selectedPreviewEventId = null;
+    syncSelectionLight();
+    render();
+    return;
+  }
   state.selectedSensorId = sensorId;
   state.selectedPreviewEventId = null;
   ensureDefaultPreview().finally(() => render());
@@ -1131,18 +1241,22 @@ function renderWaveformCard(sensor) {
   return `<div class="card">
     <h3>Deck-scoped event detail</h3>
     <p class="card-note">Events are keyed by dataset + deck + time window.</p>
-    <div class="control">
-      <label for="waveform-select">Preview event</label>
-      <select id="waveform-select" data-waveform-select>
-        ${selectable
-          .map(
-            (event) => `<option value="${event.event_group_id}" ${event.event_group_id === activeId ? "selected" : ""}>
-              ${event.start_time_utc} · ${event.sensor_count} sensors
-            </option>`
-          )
-          .join("")}
-      </select>
-    </div>
+    ${
+      selectable.length
+        ? `<div class="control">
+            <label for="waveform-select">Preview event</label>
+            <select id="waveform-select" data-waveform-select>
+              ${selectable
+                .map(
+                  (event) => `<option value="${event.event_group_id}" ${event.event_group_id === activeId ? "selected" : ""}>
+                    ${event.start_time_utc} · ${event.sensor_count} sensors
+                  </option>`
+                )
+                .join("")}
+            </select>
+          </div>`
+        : ""
+    }
     ${
       !selectable.length
         ? `<p class="empty-state">Waveform previews were not included in this bundle.</p>`
@@ -1269,7 +1383,56 @@ function passesFilter(group, value) {
 function reconcileSelection() {
   if (!state.selectedSensorId) return;
   const sensor = state.sensorLayout.find((item) => item.sensor_id === state.selectedSensorId);
-  if (!sensor || !isVisible(sensor)) state.selectedSensorId = null;
+  if (!sensor || !isVisible(sensor)) {
+    state.selectedSensorId = null;
+    state.selectedPreviewEventId = null;
+    syncSelectionLight();
+  }
+}
+
+function syncSelectionLight() {
+  if (selectionLight?.parent) {
+    selectionLight.parent.remove(selectionLight);
+  }
+  selectionLight = null;
+
+  if (!state.selectedSensorId) return;
+  const selectedObject = sensorObjs.get(state.selectedSensorId);
+  if (!selectedObject) return;
+
+  selectionLight = new THREE.PointLight(0x2e6ab4, 2.0, 14);
+  selectionLight.position.set(0, 0, 0);
+  selectedObject.group.add(selectionLight);
+}
+
+function applyWireframeMode() {
+  const deckOpacity = state.wireframe ? 0.08 : null;
+  const edgeOpacity = state.wireframe ? 0.85 : null;
+
+  for (const entry of deckMaterials) {
+    entry.material.transparent = true;
+    entry.material.opacity = deckOpacity ?? entry.opacity;
+  }
+
+  for (const entry of deckEdgeMaterials) {
+    entry.material.transparent = true;
+    entry.material.opacity = edgeOpacity ?? entry.opacity;
+  }
+
+  if (minorGrid) {
+    setHelperOpacity(minorGrid, state.wireframe ? 0.08 : 0.14);
+  }
+  if (majorGrid) {
+    setHelperOpacity(majorGrid, state.wireframe ? 0.18 : 0.22);
+  }
+
+  renderer.setClearColor(state.wireframe ? 0xf8fafc : 0xf4f7fb, 1);
+
+  for (const object of sensorObjs.values()) {
+    if (object.group.userData.labelSprite) {
+      object.group.userData.labelSprite.visible = state.wireframe;
+    }
+  }
 }
 
 function getRelatedSensors(sensor) {

@@ -30,17 +30,17 @@
         </div>
 
         <div class="topbar-controls">
-          <div class="control">
+          <div class="control topbar-control topbar-control-dataset">
             <label for="dataset-select">Dataset</label>
             <select id="dataset-select"></select>
           </div>
 
-          <div class="control">
+          <div class="control topbar-control topbar-control-metric">
             <label for="metric-select">Metric</label>
             <select id="metric-select"></select>
           </div>
 
-          <button id="reset-camera" class="ghost-button" type="button">Reset view</button>
+          <button id="reset-camera" class="ghost-button topbar-button" type="button">Reset view</button>
         </div>
       </header>
 
@@ -54,11 +54,11 @@
         <section class="tab-panel active" data-tab-panel="scene">
           <div class="scene-layout">
             <aside class="scene-sidebar">
-              <div class="panel">
+              <div class="panel control-panel">
                 <div class="panel-header">
                   <div>
                     <h2>View Controls</h2>
-                    <p class="panel-subtitle">Geometry and comparison settings for the 3D scene.</p>
+                    <p class="panel-subtitle">Primary scene filters first. Secondary toggles stay tucked away.</p>
                   </div>
                 </div>
 
@@ -68,7 +68,7 @@
                     <div class="segmented" id="family-toggle"></div>
                   </div>
 
-                  <div class="control">
+                  <div class="control secondary-control">
                     <label for="compare-mode">Compare</label>
                     <select id="compare-mode">
                       <option value="single">Single</option>
@@ -76,42 +76,45 @@
                     </select>
                   </div>
 
-                  <label class="inline-toggle">
+                  <label class="inline-toggle secondary-toggle">
+                    <input id="wireframe-toggle" type="checkbox" />
+                    <span>Schematic view</span>
+                  </label>
+
+                  <label class="inline-toggle secondary-toggle">
                     <input id="correlation-toggle" type="checkbox" />
                     <span>Show correlations</span>
                   </label>
 
-                  <button id="reset-filters" class="ghost-button" type="button">Reset filters</button>
+                  <button id="reset-filters" class="ghost-button sidebar-button" type="button">Reset filters</button>
                 </div>
+
+                <details class="inline-disclosure">
+                  <summary>Legend & interaction help</summary>
+                  <ul class="legend-list compact-legend">
+                    <li><span class="legend-chip acc"></span>Accelerometer</li>
+                    <li><span class="legend-chip str"></span>Strain sensor</li>
+                    <li><span class="legend-chip high"></span>High relative value</li>
+                    <li><span class="legend-chip old"></span>OLD deck</li>
+                    <li><span class="legend-chip new"></span>NEW deck</li>
+                  </ul>
+                  <p class="legend-note">
+                    Drag to orbit, scroll to zoom, and right-drag to pan. Double-click a marker to
+                    isolate its local neighborhood.
+                  </p>
+                </details>
               </div>
 
-              <div class="panel">
+              <div class="panel selection-panel">
                 <h2>Selection</h2>
                 <div id="scene-selection" class="selection-summary"></div>
               </div>
 
-              <details class="panel disclosure" open>
+              <details class="panel disclosure filters-panel">
                 <summary>
                   <span>Filters</span>
                 </summary>
                 <div id="filter-groups" class="filter-groups"></div>
-              </details>
-
-              <details class="panel disclosure">
-                <summary>
-                  <span>Legend</span>
-                </summary>
-                <ul class="legend-list">
-                  <li><span class="legend-chip acc"></span>Accelerometer</li>
-                  <li><span class="legend-chip str"></span>Strain sensor</li>
-                  <li><span class="legend-chip high"></span>High relative value</li>
-                  <li><span class="legend-chip old"></span>OLD deck</li>
-                  <li><span class="legend-chip new"></span>NEW deck</li>
-                </ul>
-                <p class="legend-note">
-                  Drag to orbit, scroll to zoom, and right-drag to pan. Double-click a marker to
-                  isolate its local neighborhood.
-                </p>
               </details>
             </aside>
 
