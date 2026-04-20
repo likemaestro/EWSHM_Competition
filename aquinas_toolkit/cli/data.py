@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from aquinas_toolkit.cli import terminal
-from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
+from aquinas_toolkit.dataset_fetch import DatasetFetchError, fetch_dataset
 from aquinas_toolkit.utils.dataset_config import (
     DatasetLayout,
     DatasetLayoutStatus,

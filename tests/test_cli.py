@@ -8,7 +8,7 @@ import pytest
 from aquinas_toolkit.cli import terminal
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.cli.main import main
-from aquinas_toolkit.data_fetch import DatasetFetchError
+from aquinas_toolkit.dataset_fetch import DatasetFetchError
 from aquinas_toolkit.utils import run_management
 
 

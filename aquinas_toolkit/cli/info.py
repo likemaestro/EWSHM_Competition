@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from aquinas_toolkit.cli import terminal
-from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
+from aquinas_toolkit.dataset_fetch import DatasetFetchError, fetch_dataset
 from aquinas_toolkit.io import AquinasReader
 from aquinas_toolkit.utils.dataset_config import (
     DatasetLayout,

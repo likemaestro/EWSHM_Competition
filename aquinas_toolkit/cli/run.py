@@ -12,7 +12,7 @@ from time import perf_counter
 import yaml
 
 from aquinas_toolkit.cli import terminal
-from aquinas_toolkit.data_fetch import DatasetFetchError, fetch_dataset
+from aquinas_toolkit.dataset_fetch import DatasetFetchError, fetch_dataset
 from aquinas_toolkit.utils.dataset_config import find_missing_set_names, load_dataset_layout
 from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.debug_logging import RunDebugLogger

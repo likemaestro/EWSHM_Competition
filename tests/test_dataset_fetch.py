@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from aquinas_toolkit.data_fetch import DatasetFetchError, _download_archive, fetch_dataset
-from aquinas_toolkit.dataset_source import DatasetArchiveSource
+from aquinas_toolkit.dataset_fetch import (
+    DatasetArchiveSource,
+    DatasetFetchError,
+    _download_archive,
+    fetch_dataset,
+)
 from aquinas_toolkit.utils.dataset_config import DatasetLayout, inspect_dataset_layout, load_dataset_layout
 from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 
@@ -81,7 +85,7 @@ def test_fetch_dataset_extracts_valid_archive(monkeypatch: pytest.MonkeyPatch, t
     )
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -108,7 +112,7 @@ def test_fetch_dataset_requires_force_when_destination_exists(
     (layout.dataset_root / "junk.txt").write_text("old", encoding="utf-8")
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -136,7 +140,7 @@ def test_fetch_dataset_force_aborts_on_wrong_confirmation(
 
     monkeypatch.setattr("builtins.input", lambda _: "NOPE")
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -162,7 +166,7 @@ def test_fetch_dataset_force_yes_replaces_existing_root(
     (layout.dataset_root / "junk.txt").write_text("old", encoding="utf-8")
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -190,7 +194,7 @@ def test_fetch_dataset_repairs_incomplete_existing_root_without_force(
     prompts: list[str] = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "OVERWRITE")
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -222,7 +226,7 @@ def test_fetch_dataset_incomplete_root_abort_keeps_existing_contents(
 
     monkeypatch.setattr("builtins.input", lambda _: "NOPE")
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -252,7 +256,7 @@ def test_fetch_dataset_creates_configured_destination_when_missing(
     )
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -279,7 +283,7 @@ def test_fetch_dataset_treats_readme_only_root_as_fresh_bootstrap(
     (layout.dataset_root / "README.md").write_text("placeholder", encoding="utf-8")
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -305,7 +309,7 @@ def test_fetch_dataset_treats_empty_root_as_fresh_bootstrap(
     layout.dataset_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch._download_archive",
+        "aquinas_toolkit.dataset_fetch._download_archive",
         lambda src, destination: shutil.copy2(local_zip, destination),
     )
 
@@ -366,10 +370,10 @@ def test_download_archive_tracks_known_content_length(
     )
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch.urlopen",
+        "aquinas_toolkit.dataset_fetch.urlopen",
         lambda request, timeout=300: _FakeResponse(payload, content_length=str(len(payload))),
     )
-    monkeypatch.setattr("aquinas_toolkit.data_fetch.terminal.build_download_progress", lambda transient=True: progress)
+    monkeypatch.setattr("aquinas_toolkit.dataset_fetch.terminal.build_download_progress", lambda transient=True: progress)
 
     destination = tmp_path / "download.zip"
     _download_archive(source, destination)
@@ -391,10 +395,10 @@ def test_download_archive_handles_unknown_content_length(
     )
 
     monkeypatch.setattr(
-        "aquinas_toolkit.data_fetch.urlopen",
+        "aquinas_toolkit.dataset_fetch.urlopen",
         lambda request, timeout=300: _FakeResponse(payload, content_length=None),
     )
-    monkeypatch.setattr("aquinas_toolkit.data_fetch.terminal.build_download_progress", lambda transient=True: progress)
+    monkeypatch.setattr("aquinas_toolkit.dataset_fetch.terminal.build_download_progress", lambda transient=True: progress)
 
     destination = tmp_path / "download.zip"
     _download_archive(source, destination)

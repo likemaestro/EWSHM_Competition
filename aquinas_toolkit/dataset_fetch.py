@@ -6,14 +6,30 @@ import hashlib
 import re
 import shutil
 import tempfile
+import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
-import zipfile
 
 from aquinas_toolkit.cli import terminal
-from aquinas_toolkit.dataset_source import DEFAULT_DATASET_SOURCE, DatasetArchiveSource
 from aquinas_toolkit.utils.dataset_config import DatasetLayout, inspect_dataset_layout
+
+
+@dataclass(frozen=True)
+class DatasetArchiveSource:
+    """Immutable source metadata for the public AQUINAS dataset archive."""
+
+    share_url: str
+    sha256: str
+    archive_type: str = "zip"
+    archive_filename: str = "AQUINAS_DATASET.zip"
+
+
+DEFAULT_DATASET_SOURCE = DatasetArchiveSource(
+    share_url="https://drive.google.com/file/d/1JHOBlkoT-qgHZo2c8WdK6xz976Fc7-0q",
+    sha256="936F42722B075F95DCB5E5F40CB57ADA64894691D8D5C769C9668623FD95B4AB",
+)
 
 
 class DatasetFetchError(RuntimeError):
@@ -85,7 +101,7 @@ def _validate_source(source: DatasetArchiveSource) -> None:
     if not re.fullmatch(r"[0-9a-fA-F]{64}", source.sha256):
         raise DatasetFetchError(
             "Dataset source SHA256 is not configured. "
-            "Set aquinas_toolkit/dataset_source.py DEFAULT_DATASET_SOURCE.sha256."
+            "Set aquinas_toolkit/dataset_fetch.py DEFAULT_DATASET_SOURCE.sha256."
         )
 
 
