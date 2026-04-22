@@ -35,4 +35,4 @@ Planned work:
   structure are typically around 2-10 Hz, which supports the current
   simple synchronization strategy for v1 preprocessing.
 - Methodology reference supplied by the organizer:
-  `10.1007/978-3-031-96106-9_22` (EVACES 2025 Volume 2 chapter).
+  `10.1016/j.prostr.2024.09.248`.
