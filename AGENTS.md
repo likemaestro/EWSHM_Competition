@@ -315,7 +315,7 @@ Progress output is suppressed in pytest because stdout is not a terminal.
   pseudo-continuous signal for Operational Modal Analysis. This does not
   force OMA as the competition method; aligned preprocess exports are kept
   clean so the option stays open. Organizer methodology reference:
-  DOI `10.1007/978-3-031-96106-9_22` (EVACES 2025 Volume 2).
+  DOI `10.1016/j.prostr.2024.09.248`.
 - **Expected bridge frequencies** -- typically 2-10 Hz for this
   structure, which justifies the 0.5-20 Hz default bandpass and the
   simple non-interpolating synchronization strategy in v1.
