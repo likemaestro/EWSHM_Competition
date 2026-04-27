@@ -23,7 +23,10 @@ clarity, correctness, and reproducibility over enterprise patterns.
 
 ```
 reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-[implemented]     [implemented]       [implemented]        [stub]       [stub]
+[implemented]     [implemented]       [v1 implemented]     [stub]       [stub]
+
+visualization is a sidecar package: implemented offline viewer artifacts,
+not a scored pipeline stage.
 ```
 
 - **Library code** lives in `aquinas_toolkit/`. Every reusable function
@@ -31,15 +34,21 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 - **I/O** (`aquinas_toolkit/io/`) -- data loading via `AquinasReader`.
 - **CLI** (`aquinas_toolkit/cli/`) -- `aquinas run preprocess`,
   `aquinas run features`, `aquinas run train`, `aquinas run score`,
-  `aquinas info`, `aquinas data fetch`, `aquinas viz build`, and
-  `aquinas viz open`.
+  `aquinas info`, `aquinas data fetch`, `aquinas data status`,
+  `aquinas data verify`, `aquinas data path`, `aquinas viz build`,
+  `aquinas viz open`, `aquinas about`, and `aquinas version`.
   Thin wrappers that call library code.
 - **Pipeline stages** are subpackages: `preprocessing/`, `feature_extraction/`,
   `training/`, `scoring/`. Each has a `README.md` describing its purpose
   and expected interface.
+- **Visualization** (`aquinas_toolkit/visualization/`) is implemented as an
+  offline static viewer bundle with Three.js assets and JSON artifacts. It
+  is refreshed after run commands when the configured dataset is available,
+  but it is not part of the `preprocess -> features -> train -> score`
+  stage chain.
 - **Shared utilities** live in `aquinas_toolkit/utils/` (for example
-  plotting helpers and run-management helpers used by notebooks and the
-  public package API).
+  plotting helpers, dataset path/config helpers, debug logging, and
+  run-management helpers used by notebooks, the CLI, and the public package API).
 - **Notebooks** (`notebooks/`) are for exploration, visualisation, and
   jury presentation. They import from `aquinas_toolkit`.
 - **Configs** (`configs/*.yaml`) hold all tunable parameters. Do not
@@ -51,15 +60,17 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 - **Results** go to `results/` (git-ignored except `.gitkeep`).
 - **Run layout** -- new pipeline runs live under `results/<run_id>/`
   with a snapshotted `config.yaml`, `metadata.json`, and lazy
-  `stages/<stage>/` directories. When dataset inputs are available, the
-  run command also refreshes `visualization/` for the same run.
+  `stages/<stage>/` directories. Every run command also writes
+  `debug.log`. When dataset inputs are available, the run command
+  refreshes `visualization/` for the same run.
   `results/latest.json` is only a convenience pointer to the active run.
 - **Run IDs** use the readable UTC folder format
   `YYYY-MM-DDTHH-MM-SSZ` (for example `2026-03-31T21-45-00Z`).
 - **Config source** -- in v1, new runs always snapshot
   `configs/default.yaml`; downstream stages must read the selected
   run's `config.yaml`, never the current workspace config.
-- **CLI contract** -- `aquinas run [stage] [--name NAME] [--run-id ID]`.
+- **CLI contract** -- `aquinas run [stage] [--name NAME] [--run-id ID]
+  [--verbose]`.
   Use `--name` only when creating a new run. Use `--run-id` only for
   `features`, `train`, or `score`. Visualization commands live under
   `aquinas viz ...`.
@@ -76,14 +87,17 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 | `io/` | Implemented | `AquinasReader` -- load index tables and raw waveforms |
 | `cli/` | Implemented | Run lifecycle, metadata, latest-pointer resolution, and full stage dispatch (preprocess + features wired; train and score stubs) |
 | `preprocessing/` | Implemented | Deck-aware event grouping, timestamp alignment, zeroing, bandpass filtering, SQLite storage, and preprocess-stage artifacts |
-| `feature_extraction/` | Implemented | FDD modal analysis, per-sensor waveform statistics (mean, std, RMS, min, max, peak-to-peak, energy, crest factor, zero crossing rate, skewness, kurtosis), SQLite feature store |
+| `feature_extraction/` | Implemented v1 | Per-sensor waveform statistics, TABLE-derived context fields, configured-axis acceleration FDD, mode-shape summaries, and SQLite feature storage |
 | `training/` | Stub | Unsupervised anomaly/trend detection models |
 | `utils/` | Implemented | Shared utilities: plotting helpers (`plotting.py`) and run-management helpers (`run_management.py`) used by the CLI and notebooks |
 | `scoring/` | Stub | Aggregate per-sensor scores into a global health score |
+| `visualization/` | Implemented WIP | Offline 3D bridge viewer, proxy metrics, trends, correlations, optional waveform previews, and static viewer assets |
 
 ## Current preprocessing contract
 
 - Group events per deck by exact `Start_Time` / `End_Time`.
+- The preprocess execution order is signal filtering, then zeroing, then
+  alignment.
 - Synchronize sensors using organizer `Synchro()` alignment: the first
   selected sensor is the reference, two shrinking passes narrow to the
   common timestamp window; no interpolation in v1.
@@ -101,8 +115,8 @@ reader       -->  preprocessing  -->  feature_extraction  -->  training  -->  sc
 - **Primary storage is SQLite** (`preprocess.sqlite`), written via
   `PreprocessStoreWriter`. CSV exports are an optional secondary output
   controlled by `exports.aligned_waveforms.enabled`.
-- `export.format` supports `csv.gz` (default) and `csv` for optional CSV
-  exports.
+- `exports.aligned_waveforms.format` supports `csv.gz` (default) and `csv`
+  for optional CSV exports.
 
 ## Preprocessing public API
 
@@ -113,9 +127,11 @@ from aquinas_toolkit.preprocessing import (
     LoadedEventGroup,
     OrganizerQueryResult,
     PreprocessStoreReader,
+    PreprocessWaveformMigrationWarning,
     SIGNAL_FILTER_METHODS,
     align_event_group,
     bandpass_filter_waveform_matrix,
+    detect_legacy_preprocess_waveforms,
     export_aligned_event,
     filter_loaded_event_group,
     filter_records_by_min_duration,
@@ -124,6 +140,7 @@ from aquinas_toolkit.preprocessing import (
     load_common_event_waveform_matrix,
     load_event_group,
     load_timestamp_query_frames,
+    migrate_preprocess_waveforms,
     open_preprocess_store,
     run_preprocessing,
     run_organizer_query,
@@ -153,12 +170,79 @@ from aquinas_toolkit.preprocessing import (
 | `export_aligned_event()` | function | Export one aligned event as a CSV or CSV.GZ artifact |
 | `open_preprocess_store()` | function | Open a preprocess store (SQLite or legacy CSV) as a context manager |
 | `run_preprocessing()` | function | Execute the full preprocess stage for a snapped pipeline run |
+| `detect_legacy_preprocess_waveforms()` | function | Detect old CSV waveform artifacts that can be migrated |
+| `migrate_preprocess_waveforms()` | function | Migrate legacy preprocess waveform exports into the current store layout |
 | `AlignedEvent` | dataclass | Output of `align_event_group()` |
 | `LoadedEventGroup` | dataclass | Output of `load_event_group()` |
 | `OrganizerQueryResult` | dataclass | Output of `run_organizer_query()` |
 | `PreprocessStoreReader` | class | Read-only accessor for `preprocess.sqlite` |
 | `LegacyPreprocessCsvReader` | class | Fallback reader for old CSV-only preprocess artifacts |
+| `PreprocessWaveformMigrationWarning` | warning | Warning category for legacy waveform migration issues |
 | `SIGNAL_FILTER_METHODS` | set | Supported signal filter methods: `{"none", "butterworth_bandpass"}` |
+
+## Feature extraction contract
+
+- `run_features()` reads the selected run's snapshotted `config.yaml` and the
+  canonical preprocess store under `stages/preprocess/`.
+- The canonical output is `stages/features/features.sqlite`, written by
+  `FeaturesStoreWriter` and read through `FeaturesStoreReader` /
+  `open_features_store()`.
+- The current feature store tables are `sensor_event_features`,
+  `deck_modal_peaks`, `deck_mode_shape_components`, `feature_family_status`,
+  and `stage_info`.
+- Per-sensor rows combine waveform statistics with TABLE-derived context
+  fields: duration, start/end/diff/min/max/mean/range, and temperature.
+- Modal analysis is configured under `features.modal_analysis` and currently
+  runs FDD for the configured acceleration quantity/axis (`ACC_Z` by default),
+  per `(set, deck)`, requiring full configured channel coverage by default.
+- Frequency-domain features beyond FDD and cross-sensor correlation features
+  are still deferred. Do not describe them as implemented pipeline outputs.
+- Feature extraction must inherit preprocessing's damaged-sensor exclusions;
+  do not regenerate SET4/SET5 features for excluded channels from raw files or
+  TABLE metadata.
+
+## Feature extraction public API
+
+```python
+from aquinas_toolkit.feature_extraction import (
+    FilteredEventCollection,
+    FeaturesStoreReader,
+    PreprocessedEventCollection,
+    annotate_mode_shape_locations,
+    collect_filtered_event_matrices,
+    collect_preprocessed_event_matrices,
+    frequency_domain_decomposition,
+    load_feature_settings,
+    open_features_store,
+    run_acc_fdd_from_event_matrices,
+    run_acc_fdd_from_preprocess_store,
+    run_acc_fdd_workflow,
+    run_acc_z_fdd_from_event_matrices,
+    run_acc_z_fdd_from_preprocess_store,
+    run_acc_z_fdd_workflow,
+    run_features,
+    summarize_fdd_mode_shapes,
+    summarize_fdd_peaks,
+    summarize_fdd_results,
+)
+```
+
+## Visualization contract
+
+- `aquinas viz build [--run-id ID] [--set SET] [--output PATH]
+  [--include-waveforms]` builds a portable static bundle.
+- `aquinas viz open [--run-id ID] [--host HOST] [--port PORT] [--no-browser]`
+  serves the bundle over local HTTP until interrupted; do not assume
+  `file://` loads the JSON artifacts correctly.
+- `build_visualization_artifacts()` reads the run's `config.yaml`, resolves
+  configured AQUINAS sets, summarizes index-table proxy metrics through
+  `AquinasReader`, copies `viewer_assets/`, and writes:
+  `manifest.json`, `bridge_geometry.json`, `sensor_layout.json`,
+  `sensor_metrics.json`, `sensor_trends.json`, `event_groups.json`,
+  `correlations.json`, plus optional waveform preview JSON.
+- The viewer is WIP until training/scoring are implemented. It uses proxy
+  index-table metrics (`Range`, `Mean_Value`, `Duration`, `Temperature`, event
+  count), not final structural health scores.
 
 ## Damaged sensor policy
 
@@ -250,6 +334,13 @@ history so completed sets remain visible while later sets run.
 
 Progress output is suppressed in pytest because stdout is not a terminal.
 
+`run_features()` also owns its inner progress reporting through the shared
+CLI console: loading preprocess artifacts, computing per-sensor features,
+running/skipping per `(set, deck)` modal analysis, and writing
+`features.sqlite`. `aquinas data fetch` uses the shared Rich download
+progress; `aquinas data status`, `verify`, and `path` are intentionally
+human/status commands rather than pipeline stages.
+
 ## Code conventions
 
 - **Python 3.11+**, type hints on public functions, docstrings on
@@ -288,9 +379,16 @@ Progress output is suppressed in pytest because stdout is not a terminal.
 
 - **Create new runs only from the front of the pipeline**: `aquinas run`
   and `aquinas run preprocess` always create a fresh run directory.
+- **Check dataset availability before new-run creation**: `aquinas run`
+  and `aquinas run preprocess` verify the configured dataset root before
+  creating a run. Interactive terminals may bootstrap missing inputs via
+  `aquinas data fetch`; non-interactive terminals fail with a fetch/repair
+  instruction.
 - **Resume later stages explicitly or via latest**:
   `features`, `train`, and `score` resolve the target run from
   `--run-id` or `results/latest.json`.
+- **Keep latest as a pointer, not history**: passing `--run-id` for a later
+  stage updates `results/latest.json` to that selected run.
 - **Refresh the viewer bundle from the run command**: when the dataset
   referenced by the run config is available locally, `aquinas run ...`
   refreshes `results/<run_id>/visualization/` automatically.
@@ -298,6 +396,9 @@ Progress output is suppressed in pytest because stdout is not a terminal.
   as `not_started`, `running`, `completed`, or `failed`.
 - **Keep writes atomic** for `metadata.json` and `latest.json` so an
   interrupted command does not leave a partially written file behind.
+- **Keep `debug.log` useful**: run commands write lifecycle records, stage
+  timing lines, feature/preprocess timing summaries, and failure traces.
+  `--verbose` additionally mirrors detailed timing summaries to the console.
 - **Serve the viewer over HTTP**: `aquinas viz open` runs a temporary
   local HTTP server for the bundle; do not assume the browser can load
   the viewer correctly from `file://`.
@@ -315,7 +416,7 @@ Progress output is suppressed in pytest because stdout is not a terminal.
   pseudo-continuous signal for Operational Modal Analysis. This does not
   force OMA as the competition method; aligned preprocess exports are kept
   clean so the option stays open. Organizer methodology reference:
-  DOI `10.1007/978-3-031-96106-9_22` (EVACES 2025 Volume 2).
+  DOI `10.1016/j.prostr.2024.09.248`.
 - **Expected bridge frequencies** -- typically 2-10 Hz for this
   structure, which justifies the 0.5-20 Hz default bandpass and the
   simple non-interpolating synchronization strategy in v1.
@@ -340,6 +441,74 @@ Progress output is suppressed in pytest because stdout is not a terminal.
 
 ## Attribution
 
-The data reader (`io/reader.py`) was originally written by **Zhenkun Li**
-and migrated into `aquinas_toolkit` with minimal changes. When modifying
-this file, preserve the attribution docstring at the top.
+- `aquinas_toolkit/io/reader.py` was originally written by **Zhenkun Li**
+  and migrated into `aquinas_toolkit` with minimal formatting changes.
+  Preserve the attribution docstring when editing that file.
+- Plotting helpers were adapted from Zhenkun Li's notebook exploration code.
+- FDD implementation and the ACC_Z feature-extraction workflow were
+  originally written by **Mohsen Rezvani Alile** and adapted into reusable
+  feature-extraction helpers.
+
+# Behavioral guidelines to reduce common LLM coding mistakes.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
