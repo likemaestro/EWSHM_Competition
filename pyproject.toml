@@ -40,6 +40,7 @@ aquinas = "aquinas_toolkit.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["*.ipynb"]
 lint.select = [
     "E9",
     "F821",
