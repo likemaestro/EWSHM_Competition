@@ -1,32 +1,21 @@
 # =============================================================================
-# AQUINAS Toolkit -- Default Pipeline Configuration
+# AQUINAS Toolkit -- Full Five-SET Pipeline Configuration
 # =============================================================================
 #
-# This file is the active workspace configuration for the pipeline.
-# New runs snapshot it into results/<run_id>/config.yaml so that later
-# stages resume with exactly the same settings even if this file changes.
-#
-# If you want to keep config variants, store them alongside this file
-# and copy the desired variant over configs/default.yaml before starting
-# a new run.
-#
-# =============================================================================
+# Preserves the earlier full-dataset workflow. Copy this file over
+# configs/default.yaml when running the all-SET classical pipeline.
 
-# ---------------------------------------------------------------------------
-# Data paths and dataset selection
-# ---------------------------------------------------------------------------
 data:
-  dataset_root: AQUINAS_DATASET          # relative to repo root
-  sets:                                  # which monthly datasets to use
-    - AQUINAS_SET1_2022_07               # July 2022
+  dataset_root: AQUINAS_DATASET
+  sets:
+    - AQUINAS_SET1_2022_07
+    - AQUINAS_SET2_2023_04
+    - AQUINAS_SET3_2023_08
+    - AQUINAS_SET4_2024_01
+    - AQUINAS_SET5_2024_06
 
-# ---------------------------------------------------------------------------
-# Preprocessing
-# ---------------------------------------------------------------------------
 preprocessing:
   sampling_rate_hz: 100.0                  # Raw signal sampling rate in Hz; converts sample counts to seconds and FFT bins.
-  sensor_selection:
-    decks: [OLD]                           # Selected bridge deck(s) for NN preprocessing, e.g. [OLD].
   strain:
     locations: [INF, SHE, SUP]             # Strain-type sensor locations included in NN preprocessing.
     filter:
@@ -65,10 +54,9 @@ preprocessing:
       - sensor_name: OLD_S1_UP_SUP_STR
         sets: [AQUINAS_SET4_2024_01, AQUINAS_SET5_2024_06]
         reason: damaged sensor per organizer email
-        source: François-Baptiste Cartiaux email dated April 9, 2026
+        source: Francois-Baptiste Cartiaux email dated April 9, 2026
   alignment:
-    # Signal-specific filtering and zeroing settings above are authoritative.
-    method: r_synchro               # only supported method; mirrors AQUINAS_Explorer.R Synchro()
+    method: r_synchro
   filtering:
     min_active_sensors_per_event: 1
   storage:
@@ -78,9 +66,6 @@ preprocessing:
       enabled: false
       format: csv.gz
 
-# ---------------------------------------------------------------------------
-# Feature extraction
-# ---------------------------------------------------------------------------
 features:
   sampling_rate_hz: 100.0
   modal_analysis:
@@ -96,23 +81,5 @@ features:
     noverlap: 512
     n_peaks: 3
 
-# ---------------------------------------------------------------------------
-# Unsupervised model  (TODO)
-# ---------------------------------------------------------------------------
-# model:
-#   type: pca             # pca | isolation_forest | autoencoder
-#   n_components: 10
-#   contamination: auto
-
-# ---------------------------------------------------------------------------
-# Health scoring  (TODO)
-# ---------------------------------------------------------------------------
-# scoring:
-#   aggregation: weighted_mean
-#   trend_window_months: 3
-
-# ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
 output:
   results_dir: results

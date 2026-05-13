@@ -12,8 +12,11 @@ import pytest
 from aquinas_toolkit import AquinasReader
 from aquinas_toolkit.cli import run as run_mod
 from aquinas_toolkit.preprocessing import (
+    AccInputSettings,
     LoadedEventGroup,
+    NeuralInputSettings,
     PreprocessWaveformMigrationWarning,
+    StrainInputSettings,
     align_event_group,
     detect_legacy_preprocess_waveforms,
     find_events,
@@ -28,7 +31,15 @@ from aquinas_toolkit.preprocessing import (
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent
 from aquinas_toolkit.preprocessing import pipeline as pipeline_mod
 from aquinas_toolkit.preprocessing.core import _parse_timestamps_fast
+from aquinas_toolkit.preprocessing.neural_inputs import _prepare_candidate
 from aquinas_toolkit.preprocessing.pipeline import load_preprocessing_settings
+from aquinas_toolkit.preprocessing.qc import (
+    COVERAGE_MISSING_REASON,
+    _qc_one_record,
+    _sensor_report,
+    _summary_payload,
+    strain_peak_window_bounds,
+)
 from aquinas_toolkit.preprocessing.signals import (
     bandpass_filter_waveform_matrix,
     filter_loaded_event_group,
@@ -631,6 +642,78 @@ def _build_empty_set_dataset(workspace: Path) -> Path:
     return dataset_root
 
 
+def _build_neural_preprocessing_dataset(workspace: Path) -> Path:
+    dataset_root = workspace / "AQUINAS_DATASET"
+    set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+    set_dir.mkdir(parents=True, exist_ok=True)
+    timestamps = [f"2022-07-01 00:00:00.{index * 10:03d}" for index in range(16)]
+    common_table = {
+        "Record_UID": [1],
+        "Start_Row": [1],
+        "End_Row": [16],
+        "Start_Time": ["2022-07-01 00:00:00.000"],
+        "End_Time": ["2022-07-01 00:00:00.150"],
+        "Duration": [0.16],
+        "Start_Value": [0.0],
+        "End_Value": [0.0],
+        "Diff_Value": [0.0],
+        "Min_Value": [0.0],
+        "Max_Value": [10.0],
+        "Mean_Value": [1.0],
+        "Range": [10.0],
+        "Temperature": [22.0],
+    }
+    payloads = {
+        "OLD_S1_DO_INF_STR": [0, 1, 2, 3, 4, 20, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0],
+        "OLD_S1_DO_SUP_STR": [0, 0, 1, 2, 3, 10, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0],
+        "OLD_S1_DO_INT_ACC_Z": [0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1],
+        "OLD_S1_DO_MID_ACC_Z": [1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1, 0],
+        "OLD_S1_DO_INT_ACC_Y": [5] * 16,
+    }
+    for record_uid, (sensor_name, values) in enumerate(payloads.items(), start=1):
+        table = {**common_table, "Record_UID": [record_uid], "File": [f"{sensor_name}_SET1_1.json"]}
+        _write_sensor(
+            set_dir,
+            sensor_name,
+            table_payload=table,
+            timestamps=timestamps,
+            values=values,
+        )
+    return dataset_root
+
+
+def _add_partial_neural_event(dataset_root: Path) -> None:
+    set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+    sensor_name = "OLD_S1_DO_INF_STR"
+    table_path = set_dir / f"TABLE_{sensor_name}_SET1.json"
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    table["Record_UID"].append(99)
+    table["File"].append(f"{sensor_name}_SET1_2.json")
+    table["Start_Row"].append(1)
+    table["End_Row"].append(16)
+    table["Start_Time"].append("2022-07-01 00:01:00.000")
+    table["End_Time"].append("2022-07-01 00:01:00.150")
+    table["Duration"].append(0.16)
+    table["Start_Value"].append(0.0)
+    table["End_Value"].append(0.0)
+    table["Diff_Value"].append(0.0)
+    table["Min_Value"].append(0.0)
+    table["Max_Value"].append(10.0)
+    table["Mean_Value"].append(1.0)
+    table["Range"].append(10.0)
+    table["Temperature"].append(22.0)
+    _write_json(table_path, table)
+
+    timestamps = [f"2022-07-01 00:01:00.{index * 10:03d}" for index in range(16)]
+    _write_json(
+        set_dir / sensor_name / f"{sensor_name}_SET1_2.json",
+        {
+            "timestamp": timestamps,
+            sensor_name: [0, 1, 2, 3, 4, 20, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0],
+        },
+    )
+
+
 def _write_sensor(
     set_dir: Path,
     sensor_name: str,
@@ -1126,6 +1209,469 @@ def test_run_preprocess_defaults_to_sqlite_without_optional_exports(
 
     assert (preprocess_dir / "preprocess.sqlite").is_file()
     assert not (preprocess_dir / "exports").exists()
+
+
+def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    dataset_root = _build_neural_preprocessing_dataset(tmp_path)
+    _add_partial_neural_event(dataset_root)
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "configs" / "default.yaml").write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  sampling_rate_hz: 100.0",
+                "  sensor_selection:",
+                "    decks: [OLD]",
+                "  strain:",
+                "    locations: [INF, SUP]",
+                "    peak_window_half_samples: 2",
+                "  acc:",
+                "    min_aligned_samples: 4",
+                "  event_grouping:",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  signal_filter:",
+                "    method: butterworth_bandpass",
+                "    low_hz: 0.5",
+                "    high_hz: 20.0",
+                "    order: 4",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: linear_endpoints",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: false",
+                "      format: csv.gz",
+                "output:",
+                "  results_dir: results",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    neural_inputs = np.load(preprocess_dir / "neural_inputs.npy")
+    report_dir = preprocess_dir / "report"
+    sensor_map = pd.read_csv(report_dir / "sensor_map.csv")
+    slices = json.loads((report_dir / "input_slices.json").read_text(encoding="utf-8"))
+    neural_summary = json.loads((report_dir / "neural_input_summary.json").read_text(encoding="utf-8"))
+
+    qc_dir = preprocess_dir / "qc_outputs"
+    event_qc = pd.read_csv(qc_dir / "event_qc_report.csv")
+    qc_summary = json.loads((qc_dir / "qc_summary.json").read_text(encoding="utf-8"))
+
+    assert neural_inputs.shape == (1, 15)
+    assert slices["strain"]["shape"] == [4, 2]
+    assert slices["acc_z_frequency"]["shape"] == [3, 2]
+    assert slices["temperature"]["shape"] == [1]
+    assert set(event_qc["qc_status"]) == {"keep", "discard"}
+    assert "not_available_for_global_event" in set(event_qc["discard_reason"].dropna())
+    assert neural_summary["total_retained_preprocess_events"] == 2
+    assert neural_summary["complete_selected_sensor_coverage_events"] == 1
+    assert neural_summary["events_excluded_incomplete_selected_sensor_coverage"] == 1
+    assert neural_summary["retained_events"] == 1
+    assert qc_summary["coverage_missing_records"] == 3
+    assert qc_summary["true_qc_failure_records"] == 0
+    assert (
+        sensor_map.loc[sensor_map["sensor_name"] == "OLD_S1_DO_INT_ACC_Y", "include_flag"]
+        .astype(bool)
+        .tolist()
+        == [False]
+    )
+    included = sensor_map.loc[sensor_map["include_flag"].astype(bool)].copy()
+    included = included.sort_values("global_model_channel_index", kind="mergesort")
+    assert included["model_channel_id"].tolist() == ["STR00", "STR01", "ACCZ00", "ACCZ01"]
+    assert included["global_model_channel_index"].astype(int).tolist() == [0, 1, 2, 3]
+    assert (qc_dir / "sensor_qc_report.csv").is_file()
+    assert (qc_dir / "discarded_events.csv").is_file()
+    assert (qc_dir / "qc_summary.json").is_file()
+    assert (qc_dir / "flagged_plots" / "sanity_check_retained").is_dir()
+
+
+def test_run_preprocess_applies_signal_specific_zeroing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _build_neural_preprocessing_dataset(tmp_path)
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "configs" / "default.yaml").write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  sampling_rate_hz: 100.0",
+                "  sensor_selection:",
+                "    decks: [OLD]",
+                "  strain:",
+                "    locations: [INF, SUP]",
+                "    filter:",
+                "      method: none",
+                "    zeroing:",
+                "      method: linear_endpoints",
+                "    peak_window_half_samples: 2",
+                "  acc:",
+                "    min_aligned_samples: 4",
+                "    filter:",
+                "      method: none",
+                "    zeroing:",
+                "      method: none",
+                "    frequency_transform:",
+                "      low_hz: 0.5",
+                "      high_hz: 20.0",
+                "  alignment:",
+                "    method: r_synchro",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "output:",
+                "  results_dir: results",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    with open_preprocess_store(preprocess_dir) as store:
+        event = store.list_events().iloc[0]
+        aligned = store.load_aligned_event(event["event_id"])
+
+    assert aligned["OLD_S1_DO_INF_STR"].iloc[0] == pytest.approx(0.0)
+    assert aligned["OLD_S1_DO_INF_STR"].iloc[-1] == pytest.approx(0.0)
+    assert aligned["OLD_S1_DO_INT_ACC_Z"].tolist() == [
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+    ]
+
+
+def test_default_config_documents_nn_preprocessing_and_qc_variables() -> None:
+    config_text = Path("configs/default.yaml").read_text(encoding="utf-8")
+
+    for key in [
+        "sampling_rate_hz",
+        "decks",
+        "locations",
+        "peak_window_half_samples",
+        "min_aligned_samples",
+        "time_padding",
+        "frequency_transform",
+        "flat_range_tolerance",
+        "mad_warning_threshold",
+        "mad_severe_threshold",
+        "mad_used_for_removal",
+    ]:
+        matching_lines = [line for line in config_text.splitlines() if key in line]
+        assert matching_lines, key
+        assert any("#" in line for line in matching_lines), key
+
+
+def test_load_preprocessing_settings_reads_signal_specific_preprocessing(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  strain:",
+                "    filter:",
+                "      method: none",
+                "    zeroing:",
+                "      method: linear_endpoints",
+                "  acc:",
+                "    min_aligned_samples: 4",
+                "    filter:",
+                "      method: butterworth_bandpass",
+                "      low_hz: 0.75",
+                "      high_hz: 18.0",
+                "      order: 2",
+                "    zeroing:",
+                "      method: linear_endpoints",
+                "    frequency_transform:",
+                "      low_hz: 1.0",
+                "      high_hz: 12.0",
+                "  alignment:",
+                "    method: r_synchro",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    settings = load_preprocessing_settings(config_path)
+
+    assert settings.strain_filter_method == "none"
+    assert settings.strain_zeroing_method == "linear_endpoints"
+    assert settings.acc_filter_method == "butterworth_bandpass"
+    assert settings.acc_filter_low_hz == pytest.approx(0.75)
+    assert settings.acc_filter_high_hz == pytest.approx(18.0)
+    assert settings.acc_filter_order == 2
+    assert settings.acc_zeroing_method == "linear_endpoints"
+    assert settings.neural_inputs.acc.low_hz == pytest.approx(1.0)
+    assert settings.neural_inputs.acc.high_hz == pytest.approx(12.0)
+
+
+@pytest.mark.parametrize(
+    ("peak_idx", "signal_length", "half_samples", "expected"),
+    [
+        (5, 12, 2, (3, 7)),
+        (0, 12, 2, (0, 4)),
+        (11, 12, 2, (8, 12)),
+        (1, 3, 2, None),
+    ],
+)
+def test_strain_peak_window_bounds_shift_to_keep_fixed_length(
+    peak_idx: int,
+    signal_length: int,
+    half_samples: int,
+    expected: tuple[int, int] | None,
+) -> None:
+    assert (
+        strain_peak_window_bounds(
+            peak_idx=peak_idx,
+            signal_length=signal_length,
+            peak_window_half_samples=half_samples,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("strain_values", "expected_window"),
+    [
+        ([10.0, 1.0, 0.0, 0.0, 0.0, 0.0], [10.0, 1.0, 0.0, 0.0]),
+        ([0.0, 0.0, 0.0, 0.0, 1.0, 10.0], [0.0, 0.0, 1.0, 10.0]),
+    ],
+)
+def test_prepare_candidate_shifts_edge_peak_strain_window(
+    strain_values: list[float],
+    expected_window: list[float],
+) -> None:
+    aligned = pd.DataFrame(
+        {
+            "timestamp_utc": pd.date_range("2022-07-01", periods=6, freq="10ms", tz="UTC"),
+            "OLD_S1_DO_INF_STR": strain_values,
+            "OLD_S1_DO_INT_ACC_Z": [0.0, 1.0, 0.0, -1.0, 0.0, 1.0],
+        }
+    )
+    event_sensors = pd.DataFrame(
+        {
+            "sensor_name": ["OLD_S1_DO_INF_STR", "OLD_S1_DO_INT_ACC_Z"],
+            "temperature": [22.0, 22.0],
+        }
+    )
+    event = type("Event", (), {"event_id": "event_0"})()
+
+    result = _prepare_candidate(
+        event=event,
+        aligned=aligned,
+        event_sensors=event_sensors,
+        strain_sensors=["OLD_S1_DO_INF_STR"],
+        acc_sensors=["OLD_S1_DO_INT_ACC_Z"],
+        settings=NeuralInputSettings(
+            strain=StrainInputSettings(peak_window_half_samples=2),
+            acc=AccInputSettings(min_aligned_samples=1),
+        ),
+    )
+
+    assert result["status"] == "keep"
+    assert result["strain_window"].shape == (4, 1)
+    assert result["strain_window"][:, 0].tolist() == expected_window
+
+
+def test_prepare_candidate_discards_strain_record_shorter_than_fixed_window() -> None:
+    aligned = pd.DataFrame(
+        {
+            "timestamp_utc": pd.date_range("2022-07-01", periods=3, freq="10ms", tz="UTC"),
+            "OLD_S1_DO_INF_STR": [0.0, 10.0, 0.0],
+            "OLD_S1_DO_INT_ACC_Z": [0.0, 1.0, 0.0],
+        }
+    )
+    event_sensors = pd.DataFrame(
+        {
+            "sensor_name": ["OLD_S1_DO_INF_STR", "OLD_S1_DO_INT_ACC_Z"],
+            "temperature": [22.0, 22.0],
+        }
+    )
+    event = type("Event", (), {"event_id": "event_0"})()
+
+    result = _prepare_candidate(
+        event=event,
+        aligned=aligned,
+        event_sensors=event_sensors,
+        strain_sensors=["OLD_S1_DO_INF_STR"],
+        acc_sensors=["OLD_S1_DO_INT_ACC_Z"],
+        settings=NeuralInputSettings(
+            strain=StrainInputSettings(peak_window_half_samples=2),
+            acc=AccInputSettings(min_aligned_samples=1),
+        ),
+    )
+
+    assert result["status"] == "discard"
+    assert result["discard_reason"] == "strain_window_out_of_bounds"
+
+
+@pytest.mark.parametrize("values", [[10.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 10.0]])
+def test_qc_keeps_edge_peak_when_record_can_hold_fixed_window(values: list[float]) -> None:
+    event = type(
+        "Event",
+        (),
+        {
+            "set_name": "AQUINAS_SET1_2022_07",
+            "event_id": "event_0",
+            "start_time_utc": "2022-07-01T00:00:00Z",
+            "end_time_utc": "2022-07-01T00:00:00.030Z",
+        },
+    )()
+    sensor = pd.Series(
+        {
+            "sensor_name": "OLD_S1_DO_INF_STR",
+            "duration": 0.04,
+            "range_value": 10.0,
+            "mean_value": 1.0,
+            "diff_value": 0.0,
+            "start_row_1based": 1,
+            "end_row_1based": 4,
+        }
+    )
+    aligned = pd.DataFrame(
+        {
+            "timestamp_utc": pd.date_range("2022-07-01", periods=4, freq="10ms", tz="UTC"),
+            "OLD_S1_DO_INF_STR": values,
+        }
+    )
+
+    row, _ = _qc_one_record(
+        event=event,
+        sensor=sensor,
+        aligned=aligned,
+        sampling_rate_hz=100.0,
+        peak_window_half_samples=2,
+        acc_min_aligned_samples=4,
+        flat_range_tolerance=1e-12,
+    )
+
+    assert row["qc_status"] == "keep"
+    assert row["discard_reason"] == ""
+
+
+def test_sensor_qc_report_treats_global_event_missing_as_coverage() -> None:
+    event_qc = pd.DataFrame(
+        [
+            {
+                "set_id": "AQUINAS_SET1_2022_07",
+                "sensor_name": "OLD_S1_DO_INF_STR",
+                "sensor_type": "INF_STR",
+                "event_id": f"event_{index}",
+                "qc_status": "discard" if index else "keep",
+                "discard_reason": COVERAGE_MISSING_REASON if index else "",
+            }
+            for index in range(5)
+        ]
+    )
+
+    sensor_report = _sensor_report(event_qc)
+    summary = _summary_payload(event_qc)
+    row = sensor_report.iloc[0]
+
+    assert row["n_total_records"] == 5
+    assert row["n_available_records"] == 1
+    assert row["n_coverage_missing"] == 4
+    assert row["coverage_missing_rate"] == pytest.approx(0.8)
+    assert row["n_true_qc_failures"] == 0
+    assert row["true_failure_rate"] == pytest.approx(0.0)
+    assert row["discard_rate"] == pytest.approx(0.8)
+    assert row["sensor_status"] == "good"
+    assert summary["coverage_missing_records"] == 4
+    assert summary["true_qc_failure_records"] == 0
+    assert summary["coverage_missing_rate"] == pytest.approx(0.8)
+    assert summary["true_failure_rate"] == pytest.approx(0.0)
+
+
+def test_sensor_qc_report_excludes_sensor_for_true_qc_failures() -> None:
+    event_qc = pd.DataFrame(
+        [
+            {
+                "set_id": "AQUINAS_SET1_2022_07",
+                "sensor_name": "OLD_S1_DO_SHE_STR",
+                "sensor_type": "SHE_STR",
+                "event_id": "event_0",
+                "qc_status": "keep",
+                "discard_reason": "",
+            },
+            {
+                "set_id": "AQUINAS_SET1_2022_07",
+                "sensor_name": "OLD_S1_DO_SHE_STR",
+                "sensor_type": "SHE_STR",
+                "event_id": "event_1",
+                "qc_status": "discard",
+                "discard_reason": "strain_window_out_of_bounds",
+            },
+            {
+                "set_id": "AQUINAS_SET1_2022_07",
+                "sensor_name": "OLD_S1_DO_SHE_STR",
+                "sensor_type": "SHE_STR",
+                "event_id": "event_2",
+                "qc_status": "discard",
+                "discard_reason": COVERAGE_MISSING_REASON,
+            },
+        ]
+    )
+
+    sensor_report = _sensor_report(event_qc)
+    summary = _summary_payload(event_qc)
+    row = sensor_report.iloc[0]
+
+    assert row["n_available_records"] == 2
+    assert row["n_coverage_missing"] == 1
+    assert row["n_true_qc_failures"] == 1
+    assert row["true_failure_rate"] == pytest.approx(0.5)
+    assert row["sensor_status"] == "exclude"
+    assert summary["coverage_missing_records"] == 1
+    assert summary["true_qc_failure_records"] == 1
+    assert summary["true_failure_rate"] == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize(

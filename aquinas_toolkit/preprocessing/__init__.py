@@ -32,6 +32,19 @@ from aquinas_toolkit.preprocessing.duration import (
     filter_records_by_min_duration,
     summarize_min_duration_filter,
 )
+from aquinas_toolkit.preprocessing.neural_inputs import (
+    AccInputSettings,
+    NeuralInputResult,
+    NeuralInputSettings,
+    StrainInputSettings,
+    build_neural_inputs,
+)
+from aquinas_toolkit.preprocessing.qc import (
+    QCResult,
+    QCSettings,
+    run_neural_record_qc,
+    strain_peak_window_bounds,
+)
 
 
 __all__ = [
@@ -61,4 +74,13 @@ __all__ = [
     "find_common_sensor_events",
     "load_common_event_waveform_matrix",
     "summarize_min_duration_filter",
+    "AccInputSettings",
+    "NeuralInputResult",
+    "NeuralInputSettings",
+    "QCResult",
+    "QCSettings",
+    "StrainInputSettings",
+    "build_neural_inputs",
+    "run_neural_record_qc",
+    "strain_peak_window_bounds",
 ]

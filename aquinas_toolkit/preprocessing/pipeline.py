@@ -14,7 +14,7 @@ import yaml
 from rich.progress import Progress
 
 from aquinas_toolkit.cli.terminal import progress_context
-from aquinas_toolkit.io import AquinasReader
+from aquinas_toolkit.io import AquinasReader, parse_sensor_name
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent, SYNCHRO_PASSES, align_event_group
 from aquinas_toolkit.preprocessing.core import (
     LoadedEventGroup,
@@ -24,7 +24,7 @@ from aquinas_toolkit.preprocessing.core import (
     load_event_group,
     prepare_sensor_records,
 )
-from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS, filter_loaded_event_group
+from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS
 from scipy.signal import butter
 from aquinas_toolkit.preprocessing.store import (
     EVENT_SENSOR_COLUMNS,
@@ -33,7 +33,14 @@ from aquinas_toolkit.preprocessing.store import (
     PreprocessStoreWriter,
     preprocess_store_path,
 )
-from aquinas_toolkit.preprocessing.zeroing import ZEROING_METHODS, zero_loaded_event_group
+from aquinas_toolkit.preprocessing.zeroing import ZEROING_METHODS
+from aquinas_toolkit.preprocessing.neural_inputs import (
+    AccInputSettings,
+    NeuralInputSettings,
+    StrainInputSettings,
+    build_neural_inputs,
+)
+from aquinas_toolkit.preprocessing.qc import QCSettings
 from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir, write_stage_progress
 
@@ -76,23 +83,28 @@ class SensorExclusion:
 class PreprocessingSettings:
     """Runtime settings for the preprocess stage.
 
-    Pipeline order: signal filtering -> zeroing -> alignment.
+    Pipeline order: signal-specific filtering -> signal-specific zeroing -> alignment.
     """
 
     dataset_root: Path
     set_names: tuple[str, ...]
+    sampling_rate_hz: float = 100.0
     sensor_exclusions: tuple[SensorExclusion, ...] = ()
+    selected_decks: tuple[str, ...] = ()
     event_key_fields: tuple[str, ...] = ("deck", "Start_Time", "End_Time")
-    signal_filter_method: str = "butterworth_bandpass"
-    signal_filter_low_hz: float = 0.5
-    signal_filter_high_hz: float = 20.0
-    signal_filter_order: int = 4
-    zeroing_method: str = "linear_endpoints"
+    strain_filter_method: str = "none"
+    strain_zeroing_method: str = "linear_endpoints"
+    acc_filter_method: str = "butterworth_bandpass"
+    acc_filter_low_hz: float = 0.5
+    acc_filter_high_hz: float = 20.0
+    acc_filter_order: int = 4
+    acc_zeroing_method: str = "linear_endpoints"
     alignment_method: str = "r_synchro"
     min_active_sensors_per_event: int = 1
     storage_backend: str = "sqlite"
     aligned_export_enabled: bool = False
     aligned_export_format: str = "csv.gz"
+    neural_inputs: NeuralInputSettings = NeuralInputSettings()
 
 
 def run_preprocessing(run_context: RunContext) -> None:
@@ -158,6 +170,7 @@ def run_preprocessing(run_context: RunContext) -> None:
         exclusion_counts_by_reason=exclusion_counts_by_reason,
         applied_sensor_names_by_set=applied_sensor_names_by_set,
     )
+    build_neural_inputs(preprocess_dir, settings=settings.neural_inputs)
 
 
 def _run_preprocess_sets(
@@ -261,7 +274,7 @@ def _run_preprocess_sets(
                     rows_before_alignment=0,
                     rows_after_alignment=0,
                     discard_reason=discard_reason,
-                    zeroing_method=settings.zeroing_method,
+                    zeroing_method=_zeroing_summary(settings),
                 )
                 manifest_rows.append(manifest_row)
                 set_manifest_rows.append(manifest_row)
@@ -280,12 +293,12 @@ def _run_preprocess_sets(
 
         # Pre-compute filter coefficients once (shared across all events)
         precomputed_sos = None
-        if settings.signal_filter_method == "butterworth_bandpass":
+        if settings.acc_filter_method == "butterworth_bandpass":
             precomputed_sos = butter(
-                settings.signal_filter_order,
-                [settings.signal_filter_low_hz, settings.signal_filter_high_hz],
+                settings.acc_filter_order,
+                [settings.acc_filter_low_hz, settings.acc_filter_high_hz],
                 btype="bandpass",
-                fs=100.0,
+                fs=settings.sampling_rate_hz,
                 output="sos",
             )
 
@@ -317,7 +330,7 @@ def _run_preprocess_sets(
                     rows_before_alignment=rows_before_alignment,
                     rows_after_alignment=rows_after_alignment,
                     discard_reason=discard_reason,
-                    zeroing_method=settings.zeroing_method,
+                    zeroing_method=_zeroing_summary(settings),
                 )
                 manifest_rows.append(manifest_row)
                 set_manifest_rows.append(manifest_row)
@@ -339,7 +352,7 @@ def _run_preprocess_sets(
                 rows_before_alignment=rows_before_alignment,
                 rows_after_alignment=rows_after_alignment,
                 discard_reason=None,
-                zeroing_method=settings.zeroing_method,
+                zeroing_method=_zeroing_summary(settings),
             )
             manifest_rows.append(manifest_row)
             set_manifest_rows.append(manifest_row)
@@ -477,47 +490,53 @@ def _process_heavy_event(
 
     loaded_event = load_event_group(reader, event_row, records=included_sensor_records)
 
-    # Fused filter + zero in pure numpy: one copy per waveform total
-    if settings.signal_filter_method == "butterworth_bandpass" and precomputed_sos is not None:
-        min_samples = _min_samples_for_sosfiltfilt(precomputed_sos)
-        fused_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
-        do_zero = settings.zeroing_method == "linear_endpoints"
-        for sensor_name, (meta, waveform) in loaded_event.waveforms.items():
-            values = waveform[sensor_name].to_numpy(dtype=float, copy=True)
-            np.nan_to_num(values, copy=False)
-            # Filter
-            if len(values) > min_samples:
-                values = sosfiltfilt(precomputed_sos, values)
-            # Zero (inlined to avoid pd.Series→numpy roundtrip)
-            if do_zero and len(values) > 1:
-                baseline = np.linspace(values[0], values[-1], len(values))
-                values = values - baseline
-            elif do_zero and len(values) == 1:
-                values = values - values[0]
-            w = waveform.copy()
-            w[sensor_name] = values
-            fused_waveforms[sensor_name] = (meta, w)
+    # Fused signal-specific filter + zero in pure numpy: one copy per waveform total.
+    min_samples = _min_samples_for_sosfiltfilt(precomputed_sos) if precomputed_sos is not None else 0
+    fused_waveforms: dict[str, tuple[pd.Series, pd.DataFrame]] = {}
+    for sensor_name, (meta, waveform) in loaded_event.waveforms.items():
+        values = waveform[sensor_name].to_numpy(dtype=float, copy=True)
+        np.nan_to_num(values, copy=False)
+        parsed = parse_sensor_name(sensor_name)
+        is_acc_z = parsed["quantity"] == "ACC" and parsed["axis"] == "Z"
+        is_strain = parsed["quantity"] == "STR"
 
-        from dataclasses import replace as dc_replace
+        if (
+            is_acc_z
+            and settings.acc_filter_method == "butterworth_bandpass"
+            and precomputed_sos is not None
+            and len(values) > min_samples
+        ):
+            values = sosfiltfilt(precomputed_sos, values)
 
-        fused_event = dc_replace(
-            loaded_event,
-            waveforms=fused_waveforms,
-            zeroing_method=settings.zeroing_method,
-        )
-    else:
-        filtered_event = filter_loaded_event_group(
-            loaded_event,
-            method=settings.signal_filter_method,
-            low_hz=settings.signal_filter_low_hz,
-            high_hz=settings.signal_filter_high_hz,
-            order=settings.signal_filter_order,
-            _precomputed_sos=precomputed_sos,
-        )
-        fused_event = zero_loaded_event_group(filtered_event, method=settings.zeroing_method)
+        zeroing_method = "none"
+        if is_strain:
+            zeroing_method = settings.strain_zeroing_method
+        elif is_acc_z:
+            zeroing_method = settings.acc_zeroing_method
+        if zeroing_method == "linear_endpoints" and len(values) > 1:
+            baseline = np.linspace(values[0], values[-1], len(values))
+            values = values - baseline
+        elif zeroing_method == "linear_endpoints" and len(values) == 1:
+            values = values - values[0]
+
+        w = waveform.copy()
+        w[sensor_name] = values
+        fused_waveforms[sensor_name] = (meta, w)
+
+    from dataclasses import replace as dc_replace
+
+    fused_event = dc_replace(
+        loaded_event,
+        waveforms=fused_waveforms,
+        zeroing_method=_zeroing_summary(settings),
+    )
 
     aligned_event = align_event_group(fused_event, method=settings.alignment_method)
     return aligned_event, fused_event
+
+
+def _zeroing_summary(settings: PreprocessingSettings) -> str:
+    return f"strain:{settings.strain_zeroing_method};acc_z:{settings.acc_zeroing_method}"
 
 
 def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
@@ -530,6 +549,10 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     zeroing = preprocessing.get("zeroing") or {}
     filtering = preprocessing.get("filtering") or {}
     event_grouping = preprocessing.get("event_grouping") or {}
+    sensor_selection = preprocessing.get("sensor_selection") or {}
+    strain_config = preprocessing.get("strain") or {}
+    acc_config = preprocessing.get("acc") or {}
+    qc_config = preprocessing.get("qc") or {}
     sensor_overrides = preprocessing.get("sensor_overrides") or {}
     storage = preprocessing.get("storage") or {}
     exports = preprocessing.get("exports") or {}
@@ -548,21 +571,47 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     if not set_names:
         raise ValueError("Config must provide at least one dataset in data.sets.")
 
-    signal_filter_method = str(signal_filter.get("method", "butterworth_bandpass"))
-    if signal_filter_method not in SIGNAL_FILTER_METHODS:
-        raise ValueError(
-            f"Unsupported preprocessing.signal_filter.method: {signal_filter_method!r}. "
-            f"Supported methods are {sorted(SIGNAL_FILTER_METHODS)}."
-        )
+    sampling_rate_hz = float(preprocessing.get("sampling_rate_hz", 100.0))
+    selected_decks = tuple(str(value).upper() for value in sensor_selection.get("decks", ()) if str(value).strip())
+    strain_locations = tuple(
+        str(value).upper()
+        for value in strain_config.get("locations", ("INF", "SHE", "SUP"))
+        if str(value).strip()
+    )
+    peak_window_half_samples = int(strain_config.get("peak_window_half_samples", 100))
+    if peak_window_half_samples <= 0:
+        raise ValueError("preprocessing.strain.peak_window_half_samples must be > 0.")
+    acc_min_aligned_samples = int(acc_config.get("min_aligned_samples", 500))
+    if acc_min_aligned_samples <= 0:
+        raise ValueError("preprocessing.acc.min_aligned_samples must be > 0.")
+
+    legacy_signal_filter_method = str(signal_filter.get("method", "butterworth_bandpass"))
+    _validate_filter_method(legacy_signal_filter_method, "preprocessing.signal_filter.method")
+    legacy_zeroing_method = str(zeroing.get("method", "linear_endpoints"))
+    _validate_zeroing_method(legacy_zeroing_method, "preprocessing.zeroing.method")
+
+    strain_filter = strain_config.get("filter") or {}
+    strain_zeroing = strain_config.get("zeroing") or {}
+    acc_filter = acc_config.get("filter") or {}
+    acc_zeroing = acc_config.get("zeroing") or {}
+    acc_frequency_transform = acc_config.get("frequency_transform") or {}
+
+    strain_filter_method = str(strain_filter.get("method", "none"))
+    _validate_filter_method(strain_filter_method, "preprocessing.strain.filter.method")
+    if strain_filter_method != "none":
+        raise ValueError("preprocessing.strain.filter.method must be 'none'.")
+    strain_zeroing_method = str(strain_zeroing.get("method", legacy_zeroing_method))
+    _validate_zeroing_method(strain_zeroing_method, "preprocessing.strain.zeroing.method")
+
+    acc_filter_method = str(acc_filter.get("method", legacy_signal_filter_method))
+    _validate_filter_method(acc_filter_method, "preprocessing.acc.filter.method")
+    acc_filter_low_hz = float(acc_filter.get("low_hz", signal_filter.get("low_hz", 0.5)))
+    acc_filter_high_hz = float(acc_filter.get("high_hz", signal_filter.get("high_hz", 20.0)))
+    acc_filter_order = int(acc_filter.get("order", signal_filter.get("order", 4)))
+    acc_zeroing_method = str(acc_zeroing.get("method", legacy_zeroing_method))
+    _validate_zeroing_method(acc_zeroing_method, "preprocessing.acc.zeroing.method")
 
     _validate_alignment_config(alignment)
-
-    zeroing_method = str(zeroing.get("method", "linear_endpoints"))
-    if zeroing_method not in ZEROING_METHODS:
-        raise ValueError(
-            f"Unsupported preprocessing.zeroing.method: {zeroing_method}. "
-            f"Supported methods are {sorted(ZEROING_METHODS)}."
-        )
 
     storage_backend = str(storage.get("backend", "sqlite"))
     if storage_backend != "sqlite":
@@ -582,19 +631,55 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     return PreprocessingSettings(
         dataset_root=dataset_root_path,
         set_names=set_names,
+        sampling_rate_hz=sampling_rate_hz,
         sensor_exclusions=sensor_exclusions,
+        selected_decks=selected_decks,
         event_key_fields=tuple(event_grouping.get("key_fields", ("deck", "Start_Time", "End_Time"))),
-        signal_filter_method=signal_filter_method,
-        signal_filter_low_hz=float(signal_filter.get("low_hz", 0.5)),
-        signal_filter_high_hz=float(signal_filter.get("high_hz", 20.0)),
-        signal_filter_order=int(signal_filter.get("order", 4)),
-        zeroing_method=zeroing_method,
+        strain_filter_method=strain_filter_method,
+        strain_zeroing_method=strain_zeroing_method,
+        acc_filter_method=acc_filter_method,
+        acc_filter_low_hz=acc_filter_low_hz,
+        acc_filter_high_hz=acc_filter_high_hz,
+        acc_filter_order=acc_filter_order,
+        acc_zeroing_method=acc_zeroing_method,
         alignment_method=str(alignment.get("method", "r_synchro")),
         min_active_sensors_per_event=int(filtering.get("min_active_sensors_per_event", 1)),
         storage_backend=storage_backend,
         aligned_export_enabled=aligned_export_enabled,
         aligned_export_format=aligned_export_format,
+        neural_inputs=NeuralInputSettings(
+            decks=selected_decks,
+            sampling_rate_hz=sampling_rate_hz,
+            strain=StrainInputSettings(
+                peak_window_half_samples=peak_window_half_samples,
+                locations=strain_locations,
+            ),
+            acc=AccInputSettings(
+                min_aligned_samples=acc_min_aligned_samples,
+                low_hz=float(acc_frequency_transform.get("low_hz", acc_filter_low_hz)),
+                high_hz=float(acc_frequency_transform.get("high_hz", acc_filter_high_hz)),
+            ),
+            qc=QCSettings(
+                flat_range_tolerance=float(qc_config.get("flat_range_tolerance", 1e-12)),
+                mad_warning_threshold=float(qc_config.get("mad_warning_threshold", 3.5)),
+                mad_severe_threshold=float(qc_config.get("mad_severe_threshold", 5.0)),
+            ),
+        ),
     )
+
+
+def _validate_filter_method(method: str, config_key: str) -> None:
+    if method not in SIGNAL_FILTER_METHODS:
+        raise ValueError(
+            f"Unsupported {config_key}: {method!r}. Supported methods are {sorted(SIGNAL_FILTER_METHODS)}."
+        )
+
+
+def _validate_zeroing_method(method: str, config_key: str) -> None:
+    if method not in ZEROING_METHODS:
+        raise ValueError(
+            f"Unsupported {config_key}: {method}. Supported methods are {sorted(ZEROING_METHODS)}."
+        )
 
 
 def _validate_alignment_config(alignment: dict[str, Any]) -> None:
@@ -631,6 +716,26 @@ def annotate_sensor_records(
     annotated["sensor_status"] = "included"
     annotated["exclusion_reason"] = ""
     annotated["exclusion_source"] = ""
+
+    if settings.selected_decks:
+        deck_mask = annotated["deck"].astype(str).str.upper().isin(settings.selected_decks)
+        annotated.loc[~deck_mask, "sensor_status"] = "excluded"
+        annotated.loc[~deck_mask, "exclusion_reason"] = "deck not selected for preprocessing"
+        annotated.loc[~deck_mask, "exclusion_source"] = "preprocessing.sensor_selection.decks"
+
+    for index, row in annotated.iterrows():
+        if annotated.at[index, "sensor_status"] == "excluded":
+            continue
+        parsed = parse_sensor_name(str(row["sensor_name"]))
+        quantity = parsed["quantity"]
+        axis = parsed["axis"]
+        location = parsed["location"]
+        is_strain = quantity == "STR" and str(location).upper() in settings.neural_inputs.strain.locations
+        is_acc_z = quantity == "ACC" and axis == "Z"
+        if not (is_strain or is_acc_z):
+            annotated.at[index, "sensor_status"] = "excluded"
+            annotated.at[index, "exclusion_reason"] = "channel not selected for neural preprocessing"
+            annotated.at[index, "exclusion_source"] = "preprocessing sensor selection"
 
     for exclusion in settings.sensor_exclusions:
         if set_name not in exclusion.sets:
@@ -877,14 +982,18 @@ def _write_summary(
         "per_deck_total": dict(per_deck_total),
         "per_deck_retained": dict(per_deck_retained),
         "signal_filter": {
-            "method": settings.signal_filter_method,
-            "low_hz": settings.signal_filter_low_hz,
-            "high_hz": settings.signal_filter_high_hz,
-            "order": settings.signal_filter_order,
-            "stage": "before_zeroing",
+            "strain": {"method": settings.strain_filter_method},
+            "acc_z": {
+                "method": settings.acc_filter_method,
+                "low_hz": settings.acc_filter_low_hz,
+                "high_hz": settings.acc_filter_high_hz,
+                "order": settings.acc_filter_order,
+                "stage": "before_acc_zeroing",
+            },
         },
         "zeroing": {
-            "method": settings.zeroing_method,
+            "strain_method": settings.strain_zeroing_method,
+            "acc_z_method": settings.acc_zeroing_method,
             "stage": "before_alignment",
         },
         "alignment": {
@@ -893,6 +1002,17 @@ def _write_summary(
             "passes": SYNCHRO_PASSES,
         },
         "event_grouping": {"key_fields": list(settings.event_key_fields)},
+        "sampling_rate_hz": settings.sampling_rate_hz,
+        "sensor_selection": {
+            "decks": list(settings.selected_decks),
+            "included_modalities": ["INF_STR", "SHE_STR", "SUP_STR", "ACC_Z"],
+            "excluded_modalities": ["ACC_Y"],
+        },
+        "neural_inputs": {
+            "path": str(path.parent / "neural_inputs.npy"),
+            "report_dir": str(path.parent / "report"),
+            "settings": asdict(settings.neural_inputs),
+        },
         "storage": {
             "backend": settings.storage_backend,
             "path": str(preprocess_db_path),
