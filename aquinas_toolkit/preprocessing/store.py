@@ -112,22 +112,6 @@ SENSOR_RECORD_COLUMNS = [
     "exclusion_source",
 ]
 
-SENSOR_QC_COLUMNS = [
-    "set_name",
-    "sensor_name",
-    "event_count",
-    "sensor_status",
-    "exclusion_reason",
-    "exclusion_source",
-    "table_range_median",
-    "table_range_nonzero_fraction",
-    "table_mean_abs_median",
-    "table_start_value_median",
-    "table_end_value_median",
-    "raw_range_spotcheck_median",
-    "raw_to_table_range_ratio_spotcheck",
-]
-
 
 def preprocess_store_path(path_or_stage_dir: str | Path) -> Path:
     """Resolve a preprocess store path from a stage directory or a DB path."""
@@ -303,12 +287,11 @@ class PreprocessStoreWriter:
         self,
         *,
         sensor_records: pd.DataFrame,
-        qc_report: pd.DataFrame,
         events: pd.DataFrame,
         event_sensors: pd.DataFrame,
         on_progress: Callable[[int], None] | None = None,
     ) -> None:
-        """Commit one set's metadata tables atomically (sensors, records, qc, events).
+        """Commit one set's metadata tables atomically.
 
         Aligned sample data is written separately via write_aligned_samples() during
         the event loop so per-SET peak memory stays bounded.
@@ -320,13 +303,6 @@ class PreprocessStoreWriter:
                 "sensor_records",
                 _prepare_sensor_records_frame(sensor_records),
                 SENSOR_RECORD_COLUMNS,
-                on_progress=on_progress,
-            )
-            _insert_dataframe(
-                self.conn,
-                "sensor_qc",
-                _prepare_simple_frame(qc_report, SENSOR_QC_COLUMNS),
-                SENSOR_QC_COLUMNS,
                 on_progress=on_progress,
             )
             _insert_dataframe(
@@ -1090,23 +1066,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             sensor_status TEXT NOT NULL,
             exclusion_reason TEXT NOT NULL,
             exclusion_source TEXT NOT NULL
-        );
-
-        CREATE TABLE sensor_qc (
-            set_name TEXT NOT NULL REFERENCES sets(set_name),
-            sensor_name TEXT NOT NULL REFERENCES sensors(sensor_name),
-            event_count INTEGER NOT NULL,
-            sensor_status TEXT NOT NULL,
-            exclusion_reason TEXT NOT NULL,
-            exclusion_source TEXT NOT NULL,
-            table_range_median REAL,
-            table_range_nonzero_fraction REAL,
-            table_mean_abs_median REAL,
-            table_start_value_median REAL,
-            table_end_value_median REAL,
-            raw_range_spotcheck_median REAL,
-            raw_to_table_range_ratio_spotcheck REAL,
-            PRIMARY KEY (set_name, sensor_name)
         );
 
         CREATE INDEX idx_events_set_deck_discarded_start

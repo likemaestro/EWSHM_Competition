@@ -53,11 +53,6 @@ preprocessing:
       fft_length: max_retained_length      # FFT length policy; use the padded retained-event length.
       low_hz: 0.5                          # Lowest retained ACC-Z FFT frequency bin in Hz.
       high_hz: 20.0                        # Highest retained ACC-Z FFT frequency bin in Hz.
-  qc:
-    flat_range_tolerance: 1.0e-12          # Absolute range threshold treated as a flat signal and hard discard.
-    mad_warning_threshold: 3.5             # Robust MAD z-score threshold that changes keep records to warning.
-    mad_severe_threshold: 5.0              # Robust MAD z-score threshold for severe warning plots and labels.
-    mad_used_for_removal: false            # MAD scores are warning/reporting only; they never discard records.
   event_grouping:
     key_fields: [deck, Start_Time, End_Time]
   sensor_overrides:

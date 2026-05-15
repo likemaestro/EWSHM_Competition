@@ -31,15 +31,8 @@ from aquinas_toolkit.preprocessing import (
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent
 from aquinas_toolkit.preprocessing import pipeline as pipeline_mod
 from aquinas_toolkit.preprocessing.core import _parse_timestamps_fast
-from aquinas_toolkit.preprocessing.neural_inputs import _prepare_candidate
+from aquinas_toolkit.preprocessing.neural_inputs import _prepare_candidate, strain_peak_window_bounds
 from aquinas_toolkit.preprocessing.pipeline import load_preprocessing_settings
-from aquinas_toolkit.preprocessing.qc import (
-    COVERAGE_MISSING_REASON,
-    _qc_one_record,
-    _sensor_report,
-    _summary_payload,
-    strain_peak_window_bounds,
-)
 from aquinas_toolkit.preprocessing.signals import (
     bandpass_filter_waveform_matrix,
     filter_loaded_event_group,
@@ -933,7 +926,6 @@ def test_run_preprocess_writes_stage_artifacts(
         "events",
         "event_sensors",
         "sensor_records",
-        "sensor_qc",
     }
     assert not (preprocess_dir / "preprocess.sqlite").__class__.__name__ or True  # SQLite still exists
     waveforms_dir = preprocess_dir / "waveforms"
@@ -1081,7 +1073,7 @@ def test_scripts_migrate_preprocess_waveforms_main_prints_summary(
     assert "Migration complete: 1 events moved, 0 already migrated." in captured.out
 
 
-def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report(
+def test_run_preprocess_applies_configured_sensor_exclusion(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1135,7 +1127,6 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
     summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
     with sqlite3.connect(preprocess_db) as conn:
         sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
-        qc_report = pd.read_sql_query("SELECT * FROM sensor_qc", conn)
     with open_preprocess_store(preprocess_dir) as store:
         manifest = store.list_events()
 
@@ -1171,14 +1162,6 @@ def test_run_preprocess_applies_configured_sensor_exclusion_and_writes_qc_report
         )
     assert "OLD_S1_UP_SUP_STR" not in set4_aligned.columns
     assert "OLD_S1_UP_SUP_STR" in set1_aligned.columns
-
-    set4_qc = qc_report.loc[
-        (qc_report["set_name"] == "AQUINAS_SET4_2024_01")
-        & (qc_report["sensor_name"] == "OLD_S1_UP_SUP_STR")
-    ].iloc[0]
-    assert set4_qc["sensor_status"] == "excluded"
-    assert set4_qc["table_range_median"] == pytest.approx(0.0)
-    assert set4_qc["raw_range_spotcheck_median"] > 0.0
 
     assert summary["sensor_exclusions"]["applied_record_counts_by_set"] == {
         "AQUINAS_SET4_2024_01": 1,
@@ -1273,22 +1256,15 @@ def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample
     slices = json.loads((report_dir / "input_slices.json").read_text(encoding="utf-8"))
     neural_summary = json.loads((report_dir / "neural_input_summary.json").read_text(encoding="utf-8"))
 
-    qc_dir = preprocess_dir / "qc_outputs"
-    event_qc = pd.read_csv(qc_dir / "event_qc_report.csv")
-    qc_summary = json.loads((qc_dir / "qc_summary.json").read_text(encoding="utf-8"))
-
     assert neural_inputs.shape == (1, 15)
     assert slices["strain"]["shape"] == [4, 2]
     assert slices["acc_z_frequency"]["shape"] == [3, 2]
     assert slices["temperature"]["shape"] == [1]
-    assert set(event_qc["qc_status"]) == {"keep", "discard"}
-    assert "not_available_for_global_event" in set(event_qc["discard_reason"].dropna())
     assert neural_summary["total_retained_preprocess_events"] == 2
-    assert neural_summary["complete_selected_sensor_coverage_events"] == 1
+    assert neural_summary["events_with_complete_selected_sensor_coverage"] == 1
     assert neural_summary["events_excluded_incomplete_selected_sensor_coverage"] == 1
+    assert neural_summary["events_excluded_packaging_constraints"] == 0
     assert neural_summary["retained_events"] == 1
-    assert qc_summary["coverage_missing_records"] == 3
-    assert qc_summary["true_qc_failure_records"] == 0
     assert (
         sensor_map.loc[sensor_map["sensor_name"] == "OLD_S1_DO_INT_ACC_Y", "include_flag"]
         .astype(bool)
@@ -1299,10 +1275,7 @@ def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample
     included = included.sort_values("global_model_channel_index", kind="mergesort")
     assert included["model_channel_id"].tolist() == ["STR00", "STR01", "ACCZ00", "ACCZ01"]
     assert included["global_model_channel_index"].astype(int).tolist() == [0, 1, 2, 3]
-    assert (qc_dir / "sensor_qc_report.csv").is_file()
-    assert (qc_dir / "discarded_events.csv").is_file()
-    assert (qc_dir / "qc_summary.json").is_file()
-    assert (qc_dir / "flagged_plots" / "sanity_check_retained").is_dir()
+    assert (preprocess_dir / "report" / "neural_input_summary.json").is_file()
 
 
 def test_run_preprocess_applies_signal_specific_zeroing(
@@ -1395,10 +1368,6 @@ def test_default_config_documents_nn_preprocessing_and_qc_variables() -> None:
         "min_aligned_samples",
         "time_padding",
         "frequency_transform",
-        "flat_range_tolerance",
-        "mad_warning_threshold",
-        "mad_severe_threshold",
-        "mad_used_for_removal",
     ]:
         matching_lines = [line for line in config_text.splitlines() if key in line]
         assert matching_lines, key
@@ -1551,127 +1520,6 @@ def test_prepare_candidate_discards_strain_record_shorter_than_fixed_window() ->
 
     assert result["status"] == "discard"
     assert result["discard_reason"] == "strain_window_out_of_bounds"
-
-
-@pytest.mark.parametrize("values", [[10.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 10.0]])
-def test_qc_keeps_edge_peak_when_record_can_hold_fixed_window(values: list[float]) -> None:
-    event = type(
-        "Event",
-        (),
-        {
-            "set_name": "AQUINAS_SET1_2022_07",
-            "event_id": "event_0",
-            "start_time_utc": "2022-07-01T00:00:00Z",
-            "end_time_utc": "2022-07-01T00:00:00.030Z",
-        },
-    )()
-    sensor = pd.Series(
-        {
-            "sensor_name": "OLD_S1_DO_INF_STR",
-            "duration": 0.04,
-            "range_value": 10.0,
-            "mean_value": 1.0,
-            "diff_value": 0.0,
-            "start_row_1based": 1,
-            "end_row_1based": 4,
-        }
-    )
-    aligned = pd.DataFrame(
-        {
-            "timestamp_utc": pd.date_range("2022-07-01", periods=4, freq="10ms", tz="UTC"),
-            "OLD_S1_DO_INF_STR": values,
-        }
-    )
-
-    row, _ = _qc_one_record(
-        event=event,
-        sensor=sensor,
-        aligned=aligned,
-        sampling_rate_hz=100.0,
-        peak_window_half_samples=2,
-        acc_min_aligned_samples=4,
-        flat_range_tolerance=1e-12,
-    )
-
-    assert row["qc_status"] == "keep"
-    assert row["discard_reason"] == ""
-
-
-def test_sensor_qc_report_treats_global_event_missing_as_coverage() -> None:
-    event_qc = pd.DataFrame(
-        [
-            {
-                "set_id": "AQUINAS_SET1_2022_07",
-                "sensor_name": "OLD_S1_DO_INF_STR",
-                "sensor_type": "INF_STR",
-                "event_id": f"event_{index}",
-                "qc_status": "discard" if index else "keep",
-                "discard_reason": COVERAGE_MISSING_REASON if index else "",
-            }
-            for index in range(5)
-        ]
-    )
-
-    sensor_report = _sensor_report(event_qc)
-    summary = _summary_payload(event_qc)
-    row = sensor_report.iloc[0]
-
-    assert row["n_total_records"] == 5
-    assert row["n_available_records"] == 1
-    assert row["n_coverage_missing"] == 4
-    assert row["coverage_missing_rate"] == pytest.approx(0.8)
-    assert row["n_true_qc_failures"] == 0
-    assert row["true_failure_rate"] == pytest.approx(0.0)
-    assert row["discard_rate"] == pytest.approx(0.8)
-    assert row["sensor_status"] == "good"
-    assert summary["coverage_missing_records"] == 4
-    assert summary["true_qc_failure_records"] == 0
-    assert summary["coverage_missing_rate"] == pytest.approx(0.8)
-    assert summary["true_failure_rate"] == pytest.approx(0.0)
-
-
-def test_sensor_qc_report_excludes_sensor_for_true_qc_failures() -> None:
-    event_qc = pd.DataFrame(
-        [
-            {
-                "set_id": "AQUINAS_SET1_2022_07",
-                "sensor_name": "OLD_S1_DO_SHE_STR",
-                "sensor_type": "SHE_STR",
-                "event_id": "event_0",
-                "qc_status": "keep",
-                "discard_reason": "",
-            },
-            {
-                "set_id": "AQUINAS_SET1_2022_07",
-                "sensor_name": "OLD_S1_DO_SHE_STR",
-                "sensor_type": "SHE_STR",
-                "event_id": "event_1",
-                "qc_status": "discard",
-                "discard_reason": "strain_window_out_of_bounds",
-            },
-            {
-                "set_id": "AQUINAS_SET1_2022_07",
-                "sensor_name": "OLD_S1_DO_SHE_STR",
-                "sensor_type": "SHE_STR",
-                "event_id": "event_2",
-                "qc_status": "discard",
-                "discard_reason": COVERAGE_MISSING_REASON,
-            },
-        ]
-    )
-
-    sensor_report = _sensor_report(event_qc)
-    summary = _summary_payload(event_qc)
-    row = sensor_report.iloc[0]
-
-    assert row["n_available_records"] == 2
-    assert row["n_coverage_missing"] == 1
-    assert row["n_true_qc_failures"] == 1
-    assert row["true_failure_rate"] == pytest.approx(0.5)
-    assert row["sensor_status"] == "exclude"
-    assert summary["coverage_missing_records"] == 1
-    assert summary["true_qc_failure_records"] == 1
-    assert summary["true_failure_rate"] == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize(
@@ -2099,7 +1947,6 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
         manifest = store.list_events()
     with sqlite3.connect(preprocess_db) as conn:
         sensor_records = pd.read_sql_query("SELECT * FROM sensor_records", conn)
-        qc_report = pd.read_sql_query("SELECT * FROM sensor_qc", conn)
 
     assert manifest.empty
     assert manifest.columns.tolist() == [
@@ -2152,22 +1999,6 @@ def test_run_preprocess_writes_parseable_empty_stage_artifacts_for_empty_sets(
         "sensor_status",
         "exclusion_reason",
         "exclusion_source",
-    ]
-    assert qc_report.empty
-    assert qc_report.columns.tolist() == [
-        "set_name",
-        "sensor_name",
-        "event_count",
-        "sensor_status",
-        "exclusion_reason",
-        "exclusion_source",
-        "table_range_median",
-        "table_range_nonzero_fraction",
-        "table_mean_abs_median",
-        "table_start_value_median",
-        "table_end_value_median",
-        "raw_range_spotcheck_median",
-        "raw_to_table_range_ratio_spotcheck",
     ]
     assert summary["total_events"] == 0
     assert summary["retained_events"] == 0

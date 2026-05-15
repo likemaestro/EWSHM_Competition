@@ -28,7 +28,6 @@ from aquinas_toolkit.preprocessing.signals import SIGNAL_FILTER_METHODS
 from scipy.signal import butter
 from aquinas_toolkit.preprocessing.store import (
     EVENT_SENSOR_COLUMNS,
-    SENSOR_QC_COLUMNS as SENSOR_QC_REPORT_COLUMNS,
     SENSOR_RECORD_COLUMNS,
     PreprocessStoreWriter,
     preprocess_store_path,
@@ -40,7 +39,6 @@ from aquinas_toolkit.preprocessing.neural_inputs import (
     StrainInputSettings,
     build_neural_inputs,
 )
-from aquinas_toolkit.preprocessing.qc import QCSettings
 from aquinas_toolkit.utils.dataset_paths import find_workspace_root
 from aquinas_toolkit.utils.run_management import RunContext, stage_output_dir, write_stage_progress
 
@@ -203,7 +201,6 @@ def _run_preprocess_sets(
             progress.console.print("  [warning]No records found, skipping.[/]")
             store_writer.write_set(
                 sensor_records=pd.DataFrame(columns=SENSOR_RECORD_COLUMNS),
-                qc_report=pd.DataFrame(columns=SENSOR_QC_REPORT_COLUMNS),
                 events=pd.DataFrame(columns=EVENT_MANIFEST_COLUMNS),
                 event_sensors=pd.DataFrame(columns=EVENT_SENSOR_COLUMNS),
             )
@@ -217,7 +214,6 @@ def _run_preprocess_sets(
 
         sensor_records = annotate_sensor_records(sensor_records, settings=settings, set_name=set_name)
         included_sensor_records, exclusion_log = apply_sensor_exclusions(sensor_records)
-        qc_report = build_sensor_qc_report(reader, sensor_records, settings=settings, set_name=set_name)
         progress.remove_task(load_task)
 
         # Write sensor metadata immediately so FK constraints on event_sensors
@@ -407,7 +403,7 @@ def _run_preprocess_sets(
             r for r in set_event_sensor_rows if r["event_id"] in discarded_event_ids
         ]
         metadata_rows = (
-            len(sensor_records) + len(qc_report) + len(discarded_manifest_rows)
+            len(sensor_records) + len(discarded_manifest_rows)
             + len(discarded_event_sensor_rows)
         )
         write_task = progress.add_task(
@@ -419,7 +415,6 @@ def _run_preprocess_sets(
         # failure handling and metadata semantics stay deterministic.
         store_writer.write_set(
             sensor_records=sensor_records,
-            qc_report=qc_report,
             events=pd.DataFrame(discarded_manifest_rows, columns=EVENT_MANIFEST_COLUMNS),
             event_sensors=pd.DataFrame(discarded_event_sensor_rows, columns=EVENT_SENSOR_COLUMNS),
             on_progress=lambda n, _t=write_task: progress.advance(_t, n),
@@ -552,7 +547,6 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     sensor_selection = preprocessing.get("sensor_selection") or {}
     strain_config = preprocessing.get("strain") or {}
     acc_config = preprocessing.get("acc") or {}
-    qc_config = preprocessing.get("qc") or {}
     sensor_overrides = preprocessing.get("sensor_overrides") or {}
     storage = preprocessing.get("storage") or {}
     exports = preprocessing.get("exports") or {}
@@ -659,11 +653,6 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
                 low_hz=float(acc_frequency_transform.get("low_hz", acc_filter_low_hz)),
                 high_hz=float(acc_frequency_transform.get("high_hz", acc_filter_high_hz)),
             ),
-            qc=QCSettings(
-                flat_range_tolerance=float(qc_config.get("flat_range_tolerance", 1e-12)),
-                mad_warning_threshold=float(qc_config.get("mad_warning_threshold", 3.5)),
-                mad_severe_threshold=float(qc_config.get("mad_severe_threshold", 5.0)),
-            ),
         ),
     )
 
@@ -767,77 +756,6 @@ def apply_sensor_exclusions(sensor_records: pd.DataFrame) -> tuple[pd.DataFrame,
 
     included = sensor_records.loc[sensor_records["sensor_status"] == "included"].copy()
     return included.reset_index(drop=True), exclusion_log
-
-
-def build_sensor_qc_report(
-    reader: AquinasReader,
-    sensor_records: pd.DataFrame,
-    *,
-    settings: PreprocessingSettings,
-    set_name: str,
-    raw_spotcheck_samples: int = 3,
-) -> pd.DataFrame:
-    """Build a report-only per-sensor QC summary for one dataset set."""
-    range_column = reader.match_column(sensor_records, ["Range"])
-    mean_column = reader.match_column(sensor_records, ["Mean_Value"])
-    start_value_column = reader.match_column(sensor_records, ["Start_Value"])
-    end_value_column = reader.match_column(sensor_records, ["End_Value"])
-
-    rows: list[dict[str, Any]] = []
-    for sensor_name, sensor_group in sensor_records.groupby("sensor_name", sort=True):
-        range_values = _numeric_series(sensor_group[range_column]) if range_column else pd.Series(dtype=float)
-        mean_values = _numeric_series(sensor_group[mean_column]) if mean_column else pd.Series(dtype=float)
-        start_values = _numeric_series(sensor_group[start_value_column]) if start_value_column else pd.Series(dtype=float)
-        end_values = _numeric_series(sensor_group[end_value_column]) if end_value_column else pd.Series(dtype=float)
-
-        status = str(sensor_group["sensor_status"].iloc[0])
-        exclusion_reason = str(sensor_group["exclusion_reason"].iloc[0])
-        exclusion_source = str(sensor_group["exclusion_source"].iloc[0])
-
-        row = {
-            "set_name": set_name,
-            "sensor_name": sensor_name,
-            "event_count": int(len(sensor_group)),
-            "sensor_status": status,
-            "exclusion_reason": exclusion_reason,
-            "exclusion_source": exclusion_source,
-            "table_range_median": _safe_median(range_values),
-            "table_range_nonzero_fraction": float((range_values != 0).mean()) if not range_values.empty else float("nan"),
-            "table_mean_abs_median": _safe_median(mean_values.abs()),
-            "table_start_value_median": _safe_median(start_values),
-            "table_end_value_median": _safe_median(end_values),
-            "raw_range_spotcheck_median": float("nan"),
-            "raw_to_table_range_ratio_spotcheck": float("nan"),
-        }
-
-        if status == "excluded":
-            raw_ranges = []
-            table_ranges = []
-            for _, meta_row in sensor_group.head(raw_spotcheck_samples).iterrows():
-                waveform = _load_waveform_slice(reader, meta_row)
-                values = pd.to_numeric(waveform[sensor_name], errors="coerce").dropna()
-                if values.empty:
-                    continue
-                raw_range = float(values.max() - values.min())
-                raw_ranges.append(raw_range)
-                if range_column is not None:
-                    table_ranges.append(float(meta_row[range_column]))
-            if raw_ranges:
-                row["raw_range_spotcheck_median"] = _safe_median(pd.Series(raw_ranges, dtype=float))
-                if table_ranges:
-                    ratios = [
-                        raw_range / table_range
-                        for raw_range, table_range in zip(raw_ranges, table_ranges, strict=False)
-                        if table_range != 0
-                    ]
-                    if ratios:
-                        row["raw_to_table_range_ratio_spotcheck"] = _safe_median(
-                            pd.Series(ratios, dtype=float)
-                        )
-
-        rows.append(row)
-
-    return pd.DataFrame(rows, columns=SENSOR_QC_REPORT_COLUMNS)
 
 
 def _parse_sensor_exclusion(entry: Any) -> SensorExclusion:

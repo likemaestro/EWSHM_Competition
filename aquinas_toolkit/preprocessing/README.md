@@ -12,8 +12,9 @@ Implemented for v1.
 
 Pipeline order: **signal filtering → zeroing → alignment**
 
-1. Zero-phase Butterworth band-pass filter applied to each raw sensor
-   waveform (default 0.5–20 Hz, order 4).
+1. Signal-specific filtering applied to each raw sensor waveform:
+  strain uses `none`; ACC_Z uses zero-phase Butterworth band-pass
+  filtering by default (0.5–20 Hz, order 4).
 2. Per-sensor linear-endpoint baseline removal (zeroing).
 3. Organizer `Synchro()` timestamp alignment across sensors.
 
@@ -21,9 +22,9 @@ Pipeline order: **signal filtering → zeroing → alignment**
 
 - **Input:** raw waveform DataFrames from `AquinasReader`, grouped by
   exact event windows within each deck
-- **Output:** filtered, zeroed, aligned per-event waveform tables plus
-  manifest and diagnostics artifacts under
-  `results/<run_id>/stages/preprocess/`
+- **Output:** SQLite-backed preprocess artifacts plus per-event waveform
+  `.npy` / `.meta.json` files, manifest and audit artifacts, and
+  `neural_inputs.npy` under `results/<run_id>/stages/preprocess/`
 
 ## Public API
 
@@ -62,7 +63,7 @@ from aquinas_toolkit.preprocessing import (
 Key symbols:
 
 | Symbol | Kind | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `filter_loaded_event_group()` | function | Apply zero-phase band-pass filter to each raw sensor slice (first conditioning step) |
 | `zero_loaded_event_group()` | function | Apply baseline removal to each filtered sensor slice before alignment |
 | `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
@@ -111,10 +112,11 @@ The preprocessing pipeline conditions each raw event in three sequential
 steps, in this order:
 
 1. **Signal filtering** — `filter_loaded_event_group()` applies a
-   zero-phase Butterworth band-pass filter (`butterworth_bandpass`,
-   default 0.5–20 Hz, order 4) independently to each raw sensor
-   waveform. Filtering on the raw signal ensures no baseline or
-   alignment artefacts contaminate the passband.
+  signal-specific filter independently to each raw sensor waveform.
+  In the current preprocess run, strain uses `none` while ACC_Z uses
+  zero-phase Butterworth band-pass filtering (`butterworth_bandpass`,
+  default 0.5–20 Hz, order 4). Filtering on the raw signal ensures no
+  baseline or alignment artefacts contaminate the passband.
 2. **Zeroing** — `zero_loaded_event_group()` applies linear-endpoint
    baseline removal to each filtered sensor slice. Zeroing after
    filtering keeps the baseline estimate within the filtered band.
@@ -164,21 +166,16 @@ steps, in this order:
 ## Design Decisions From Organizer Q&A
 
 | Source / date | Organizer point | Adopted implementation | Affected default or artifact | Status |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Email, April 2, 2026 | Recording is triggered per deck with a 5-second pre-trigger buffer and a quiet-tail stop rule | Keep preprocessing deck-specific and preserve full raw record duration | Event grouping and waveform loading | Implemented now |
 | Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Logger polling causes slight sensor time shifts | Use the organizer `Synchro()` workflow with first-selected reference and two shrinking passes | `alignment.method = r_synchro`, alignment diagnostics | Implemented now |
 | Meeting Q&A, April 9, 2026 | Synchronize without interpolation | Keep organizer alignment discrete and non-interpolating | `align_event_group()` and aligned exports | Implemented now |
-| Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Zeroing is flexible; endpoint-line subtraction is the shared helper behavior | Make organizer endpoint subtraction the runtime default, applied after band-pass filtering | `zeroing.method = linear_endpoints` | Implemented now |
+| Meeting Q&A + `AQUINAS_Explorer.R`, April 9, 2026 | Zeroing is flexible; endpoint-line subtraction is the shared helper behavior | Make organizer endpoint subtraction the runtime default, applied after any signal-specific filtering | `zeroing.method = linear_endpoints` | Implemented now |
 | Meeting Q&A, April 9, 2026 | Missing or incomplete records can be discarded if justified | Keep discard reasons explicit in stage artifacts | `event_manifest.csv`, `summary.json` | Implemented now |
 | Organizer email, April 9, 2026 | One sensor was damaged between SET3 and SET4 and should be discarded for SET4 and SET5 only | Add a config-driven exclusion policy rather than hardcoding it in the algorithm | `preprocessing.sensor_overrides.exclude` | Implemented now |
-| Local dataset validation, April 9, 2026 guidance | `OLD_S1_UP_SUP_STR` matches the warning: TABLE `Range` becomes `0.0` throughout SET4 and SET5 while raw slices still vary and the baseline shifts sharply | Emit a report-only QC artifact that validates the exclusion and keeps the decision auditable | `sensor_qc_report.csv` | Implemented now |
+| Local dataset validation, April 9, 2026 guidance | `OLD_S1_UP_SUP_STR` matches the warning: TABLE `Range` becomes `0.0` throughout SET4 and SET5 while raw slices still vary and the baseline shifts sharply | Keep the exclusion config-driven and expose it through manifest and summary artifacts | `sensor_records.csv`, `event_manifest.csv`, `summary.json` | Implemented now |
 | Meeting Q&A, April 9, 2026 | Temperature is not hardware-compensated | Preserve temperature metadata but defer active compensation | `sensor_records.csv` | Deferred but acknowledged |
 | Follow-up Q&A, source date pending | Expected frequencies are around 2–10 Hz | Use 0.5–20 Hz band-pass as the default passband in both the preprocessing pipeline and the FDD analysis notebook | `signal_filter.low_hz`, `signal_filter.high_hz` | Implemented now |
-
-<!-- TODO: consider writing aligned waveforms to a SQLite database instead of
-     CSV/CSV.GZ. Subsequent stages (feature extraction, training, scoring)
-     query by event, sensor, set, and deck. Indexed SQL lookups would be
-     faster than scanning compressed CSV files on each stage run. -->
 
 ## Performance
 
@@ -196,14 +193,14 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 
 ## Implemented Now
 
-- Band-pass filtering before zeroing and alignment (zero-phase Butterworth,
-  configurable passband, default 0.5–20 Hz)
+- Signal-specific conditioning before alignment: unfiltered strain and
+  Butterworth-filtered ACC_Z by default
 - Exact event grouping with `set + deck + Start_Time + End_Time`
 - Organizer-style strict timestamp containment for timestamp queries
 - Organizer `Synchro()` alignment without interpolation
 - Zeroing after filtering with organizer `linear_endpoints` as the default
 - Exclusion-aware manifests, sensor-record statuses, and summary counts
-- QC reporting for the damaged-sensor override
+- Config-driven damaged-sensor override reporting in manifest and summary artifacts
 - Manifest, sensor-record, aligned-export, and summary artifacts
 - Local Python-vs-R parity validation against the original helper
 - Notebook examples that exercise the package API instead of embedding logic
@@ -226,19 +223,32 @@ Additional implementation notes:
 
 ## Which config fields are true knobs in v1
 
-- `signal_filter.method` is active; `butterworth_bandpass` and `none`
-  are the supported values. Set to `none` to skip filtering.
-- `signal_filter.low_hz`, `signal_filter.high_hz`, and
-  `signal_filter.order` are active and control the Butterworth passband.
-- `alignment.method` is active; `r_synchro` is the only supported value.
-  Retained as an extension point for future organizer-compatible methods.
-- Legacy alignment keys (`reference_sensor`, `tolerance_ms`,
-  `drop_unmatched_rows`) are rejected when loading preprocessing settings.
-- `zeroing.method` (`none` or `linear_endpoints`) and
-  `min_active_sensors_per_event` are active runtime settings in v1.
-- `event_grouping.key_fields` records the fixed v1 grouping contract.
-- `export.partition_by` records the fixed v1 aligned-export partitioning.
-- `export.format` is active; supports `csv.gz` and `csv`.
+- `preprocessing.strain.filter.method` and
+  `preprocessing.acc.filter.method` are the active signal-specific
+  filtering controls. Supported runtime values are `none` and
+  `butterworth_bandpass`, but the current implementation requires
+  `preprocessing.strain.filter.method = none`.
+- `preprocessing.acc.filter.low_hz`, `high_hz`, and `order` control the
+  ACC_Z Butterworth passband.
+- `preprocessing.strain.zeroing.method` and
+  `preprocessing.acc.zeroing.method` control signal-specific baseline
+  removal.
+- `preprocessing.strain.peak_window_half_samples` controls the fixed
+  strain clipping window used later for neural input packaging.
+- `preprocessing.acc.min_aligned_samples` and
+  `preprocessing.acc.frequency_transform.low_hz` / `high_hz` control the
+  ACC_Z neural-input packaging rules.
+- `preprocessing.alignment.method` is active; `r_synchro` is the only
+  supported value. Legacy alignment keys (`reference_sensor`,
+  `tolerance_ms`, `drop_unmatched_rows`) are rejected.
+- `preprocessing.filtering.min_active_sensors_per_event` is the active
+  pre-alignment inclusion threshold.
+- `preprocessing.event_grouping.key_fields` records the fixed v1
+  grouping contract.
+- `preprocessing.storage.backend` is active and currently only supports
+  `sqlite`.
+- `preprocessing.exports.aligned_waveforms.enabled` and `format` control
+  optional CSV or CSV.GZ aligned exports.
 
 ## Deferred But Acknowledged
 
@@ -260,7 +270,8 @@ override:
 - excluded rows remain visible in `sensor_records.csv`
   with `sensor_status = excluded`
 - per-event exclusions are surfaced in `event_manifest.csv`
-- `sensor_qc_report.csv` records the supporting evidence
+- `sensor_records.csv`, `event_manifest.csv`, and `summary.json`
+  record the configured exclusion and its effects on affected runs
 
 What this means in code:
 

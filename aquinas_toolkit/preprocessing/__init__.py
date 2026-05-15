@@ -38,11 +38,6 @@ from aquinas_toolkit.preprocessing.neural_inputs import (
     NeuralInputSettings,
     StrainInputSettings,
     build_neural_inputs,
-)
-from aquinas_toolkit.preprocessing.qc import (
-    QCResult,
-    QCSettings,
-    run_neural_record_qc,
     strain_peak_window_bounds,
 )
 
@@ -77,10 +72,7 @@ __all__ = [
     "AccInputSettings",
     "NeuralInputResult",
     "NeuralInputSettings",
-    "QCResult",
-    "QCSettings",
     "StrainInputSettings",
     "build_neural_inputs",
-    "run_neural_record_qc",
     "strain_peak_window_bounds",
 ]

@@ -122,7 +122,7 @@ EWSHM_Competition/
 | `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
 | `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess and features dispatch; train and score pending |
 | `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
-| `aquinas_toolkit.preprocessing` | Implemented | Band-pass filtering -> zeroing -> alignment pipeline with manifests and QC artifacts |
+| `aquinas_toolkit.preprocessing` | Implemented | Signal-specific filtering -> zeroing -> alignment pipeline with manifests, SQLite artifacts, neural-input packaging, and sensor override audit outputs |
 | `aquinas_toolkit.feature_extraction` | Implemented | FDD modal analysis plus per-sensor waveform statistics and SQLite feature storage |
 | `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
 | `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
@@ -148,18 +148,19 @@ follow-up email from Francois-Baptiste Cartiaux:
 
 ## What preprocessing now does
 
-Pipeline order: **band-pass filter -> zeroing -> alignment**
+Pipeline order: **signal-specific filtering -> zeroing -> alignment**
 
 - groups events by deck and exact event window (`Start_Time` / `End_Time`)
 - queries organizer-style timestamp windows with strict containment
-- applies a zero-phase Butterworth band-pass filter (default 0.5-20 Hz) to
-  each raw waveform before any baseline or timing correction
+- leaves strain unfiltered and applies a zero-phase Butterworth band-pass
+  filter (default 0.5-20 Hz) to ACC_Z before any baseline or timing correction
 - applies per-sensor linear-endpoint zeroing (baseline removal) after filtering
 - aligns sensors with the organizer `Synchro()` workflow:
   first selected sensor as reference, two shrinking passes, no interpolation
-- writes event manifests, sensor-record status tables, aligned exports,
-  summary diagnostics, a damaged-sensor QC report, and a local
-  Python-vs-R parity harness
+- writes event manifests, sensor-record status tables, a canonical
+  SQLite preprocess store, per-event waveform artifacts, neural-input
+  packaging reports, an audit report for the damaged-sensor override,
+  and a local Python-vs-R parity harness
 
 Team-facing details and rationale live in:
 

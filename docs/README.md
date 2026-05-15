@@ -8,6 +8,7 @@ Reference documents for the EWSHM 2026 competition.
 |---|---|
 | [Challenge Rules](20260127_rules_challenge_1_OSMOS.pdf) | Competition objectives, evaluation criteria, timeline, and contact information from OSMOS Group |
 | [AQUINAS Dataset Handbook](Aquinas-Dataset-Handbook.pdf) | Full technical specification of the dataset: bridge description, sensor layout, file formats, naming conventions, and units |
+| [SET1 OLD Preprocessing and Neural Input Workflow](set1_old_preprocessing_neural_input_workflow.md) | Step-by-step summary of the current SET1/OLD preprocessing flow, sensor-specific conditioning, `r_synchro` alignment, and why only complete 20-sensor events feed the neural network |
 
 ## Dataset reference
 
@@ -57,8 +58,8 @@ to clarify implementation choices where they add operational detail.
 
 | Topic | Organizer guidance | Affects | Reflected in |
 |---|---|---|---|
-| Damaged sensor | One sensor was damaged between SET3 and SET4 and should be discarded for SET4 and SET5 while kept for SET1-SET3 | code now | Config-driven exclusion policy and preprocess QC report |
-| Local evidence | `OLD_S1_UP_SUP_STR` matches the warning: the TABLE `Range` field collapses to `0.0` in SET4 and SET5 while raw slices still vary and the baseline jumps to about `30` | code now | `sensor_qc_report.csv` and [preprocessing/README](../aquinas_toolkit/preprocessing/README.md) |
+| Damaged sensor | One sensor was damaged between SET3 and SET4 and should be discarded for SET4 and SET5 while kept for SET1-SET3 | code now | Config-driven exclusion policy applied before alignment |
+| Local evidence | `OLD_S1_UP_SUP_STR` matches the warning: the TABLE `Range` field collapses to `0.0` in SET4 and SET5 while raw slices still vary and the baseline jumps to about `30` | code now | [preprocessing/README](../aquinas_toolkit/preprocessing/README.md) and run artifacts |
 
 Implementation summary from that email:
 
@@ -73,8 +74,8 @@ Implementation summary from that email:
   raw waveform file is flat; the concern is the inconsistency between
   the raw waveform and its summary metadata, plus the large baseline
   shift
-- `sensor_qc_report.csv` exists specifically so the team can audit why
-  this override is present
+- the configured exclusion remains auditable through
+  `sensor_records.csv`, `event_manifest.csv`, and `summary.json`
 
 ### Follow-up organizer answers, source date pending
 

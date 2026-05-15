@@ -11,14 +11,29 @@ import numpy as np
 import pandas as pd
 
 from aquinas_toolkit.io import parse_sensor_name
-from aquinas_toolkit.preprocessing.qc import (
-    COVERAGE_MISSING_REASON,
-    QCSettings,
-    TRUE_QC_FAILURE_REASONS,
-    run_neural_record_qc,
-    strain_peak_window_bounds,
-)
 from aquinas_toolkit.preprocessing.store import open_preprocess_store
+
+
+def strain_peak_window_bounds(
+    *,
+    peak_idx: int,
+    signal_length: int,
+    peak_window_half_samples: int,
+) -> tuple[int, int] | None:
+    """Return fixed-length strain window bounds shifted inside signal limits."""
+    target_length = peak_window_half_samples * 2
+    if target_length <= 0 or signal_length < target_length:
+        return None
+
+    start = peak_idx - peak_window_half_samples
+    stop = peak_idx + peak_window_half_samples
+    if start < 0:
+        start = 0
+        stop = target_length
+    elif stop > signal_length:
+        stop = signal_length
+        start = signal_length - target_length
+    return start, stop
 
 
 @dataclass(frozen=True)
@@ -46,8 +61,6 @@ class NeuralInputSettings:
     sampling_rate_hz: float = 100.0
     strain: StrainInputSettings = StrainInputSettings()
     acc: AccInputSettings = AccInputSettings()
-    qc: QCSettings = QCSettings()
-    plot_max_per_reason: int = 5
 
 
 @dataclass(frozen=True)
@@ -71,7 +84,6 @@ def build_neural_inputs(
     """Build the canonical flattened neural input tensor from preprocess outputs."""
     output_path = preprocess_dir / "neural_inputs.npy"
     report_dir = preprocess_dir / "report"
-    qc_output_dir = preprocess_dir / "qc_outputs"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     with open_preprocess_store(preprocess_dir) as store:
@@ -87,27 +99,22 @@ def build_neural_inputs(
         sensor_map.to_csv(report_dir / "sensor_map.csv", index=False)
 
         required_sensor_names = strain_sensors + acc_sensors
-        qc_result = run_neural_record_qc(
-            store,
-            retained_events=selected_retained_events,
-            required_sensor_names=required_sensor_names,
-            sampling_rate_hz=settings.sampling_rate_hz,
-            peak_window_half_samples=settings.strain.peak_window_half_samples,
-            acc_min_aligned_samples=settings.acc.min_aligned_samples,
-            settings=settings.qc,
-            output_dir=qc_output_dir,
-        )
 
         candidates: list[dict[str, Any]] = []
         acc_lengths: list[int] = []
+        complete_coverage_events = 0
+        incomplete_coverage_events = 0
+        packaging_rejected_events = 0
 
         for event in selected_retained_events.itertuples(index=False):
             event_id = str(event.event_id)
-            if event_id not in qc_result.retained_event_ids:
-                continue
-
             event_sensors = store.load_event_sensors(event_id)
             aligned = store.load_aligned_event(event_id)
+            if not _has_required_sensor_coverage(aligned, required_sensor_names):
+                incomplete_coverage_events += 1
+                continue
+
+            complete_coverage_events += 1
             result = _prepare_candidate(
                 event=event,
                 aligned=aligned,
@@ -117,6 +124,7 @@ def build_neural_inputs(
                 settings=settings,
             )
             if result["status"] != "keep":
+                packaging_rejected_events += 1
                 continue
 
             candidates.append(result)
@@ -160,15 +168,10 @@ def build_neural_inputs(
         report_dir,
         settings=settings,
         neural_inputs=neural_inputs,
-        total_qc_records=len(qc_result.event_qc),
-        discarded_qc_records=int((qc_result.event_qc["qc_status"] == "discard").sum()),
         total_retained_preprocess_events=len(selected_retained_events),
-        complete_coverage_events=len(qc_result.retained_event_ids),
-        incomplete_coverage_events=_count_events_with_reason(
-            qc_result.event_qc,
-            reason=COVERAGE_MISSING_REASON,
-        ),
-        true_qc_failure_events=_count_events_with_true_failures(qc_result.event_qc),
+        complete_coverage_events=complete_coverage_events,
+        incomplete_coverage_events=incomplete_coverage_events,
+        packaging_rejected_events=packaging_rejected_events,
         strain_sensors=strain_sensors,
         acc_sensors=acc_sensors,
         frequency_bins=frequency_bins,
@@ -189,6 +192,10 @@ def _filter_events_by_deck(retained_events: pd.DataFrame, *, decks: tuple[str, .
     if not decks or retained_events.empty:
         return retained_events.copy()
     return retained_events.loc[retained_events["deck"].astype(str).isin(decks)].copy()
+
+
+def _has_required_sensor_coverage(aligned: pd.DataFrame, required_sensor_names: list[str]) -> bool:
+    return set(required_sensor_names).issubset(set(aligned.columns))
 
 
 def _build_sensor_map(
@@ -352,51 +359,15 @@ def _acc_frequency_block(
     return spectrum[mask, :].astype(np.float32, copy=False)
 
 
-def _event_qc_row(event: Any, status: str, reason: str, details: list[Any]) -> dict[str, Any]:
-    return {
-        "set_id": str(event.set_name),
-        "deck": str(event.deck),
-        "event_id": str(event.event_id),
-        "Start_Time": str(event.start_time_utc),
-        "End_Time": str(event.end_time_utc),
-        "qc_status": status,
-        "discard_reason": reason,
-        "details": json.dumps(details),
-    }
-
-
-def _write_sensor_qc_report(path: Path, sensor_map: pd.DataFrame, event_qc_rows: list[dict[str, Any]]) -> None:
-    total = len(event_qc_rows)
-    retained = sum(1 for row in event_qc_rows if row["qc_status"] == "keep")
-    rows = []
-    for sensor in sensor_map.itertuples(index=False):
-        include = bool(sensor.include_flag)
-        rows.append(
-            {
-                "sensor_name": sensor.sensor_name,
-                "sensor_type": sensor.sensor_type,
-                "n_total_records": total if include else 0,
-                "n_retained_records": retained if include else 0,
-                "n_discarded_records": total - retained if include else 0,
-                "discard_rate": ((total - retained) / total) if include and total else 0.0,
-                "main_discard_reasons": "",
-                "sensor_status": "good" if include else "exclude",
-            }
-        )
-    pd.DataFrame(rows).to_csv(path, index=False)
-
-
 def _write_metadata_files(
     report_dir: Path,
     *,
     settings: NeuralInputSettings,
     neural_inputs: np.ndarray,
-    total_qc_records: int,
-    discarded_qc_records: int,
     total_retained_preprocess_events: int,
     complete_coverage_events: int,
     incomplete_coverage_events: int,
-    true_qc_failure_events: int,
+    packaging_rejected_events: int,
     strain_sensors: list[str],
     acc_sensors: list[str],
     frequency_bins: np.ndarray,
@@ -433,13 +404,11 @@ def _write_metadata_files(
     )
     summary = {
         "neural_inputs_shape": list(neural_inputs.shape),
-        "total_qc_records": total_qc_records,
         "total_retained_preprocess_events": total_retained_preprocess_events,
-        "complete_selected_sensor_coverage_events": complete_coverage_events,
+        "events_with_complete_selected_sensor_coverage": complete_coverage_events,
         "events_excluded_incomplete_selected_sensor_coverage": incomplete_coverage_events,
-        "events_excluded_true_qc_failure": true_qc_failure_events,
+        "events_excluded_packaging_constraints": packaging_rejected_events,
         "retained_events": int(neural_inputs.shape[0]),
-        "discarded_qc_records": discarded_qc_records,
         "settings": asdict(settings),
     }
     (report_dir / "neural_input_summary.json").write_text(
@@ -454,9 +423,8 @@ def _write_metadata_files(
                 f"- Retained preprocess events checked: `{total_retained_preprocess_events}`",
                 f"- Events with complete selected-sensor coverage: `{complete_coverage_events}`",
                 f"- Events excluded for incomplete selected-sensor coverage: `{incomplete_coverage_events}`",
-                f"- Events excluded for true QC failures: `{true_qc_failure_events}`",
+                f"- Events excluded by packaging constraints: `{packaging_rejected_events}`",
                 f"- Retained events: `{int(neural_inputs.shape[0])}`",
-                f"- Discarded QC records: `{discarded_qc_records}`",
                 f"- Strain channels: `{len(strain_sensors)}`",
                 f"- ACC-Z channels: `{len(acc_sensors)}`",
                 f"- Frequency bins: `{len(frequency_bins)}`",
@@ -464,59 +432,4 @@ def _write_metadata_files(
         )
         + "\n",
         encoding="utf-8",
-    )
-
-
-def _write_required_plots(
-    flagged_plots_dir: Path,
-    event_qc_rows: list[dict[str, Any]],
-    neural_inputs: np.ndarray,
-    *,
-    settings: NeuralInputSettings,
-) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
-
-    reasons = [row["discard_reason"] or "keep" for row in event_qc_rows]
-    counts = pd.Series(reasons, dtype=object).value_counts()
-    fig, ax = plt.subplots(figsize=(8, 4))
-    if counts.empty:
-        ax.text(0.5, 0.5, "No candidate events", ha="center", va="center")
-        ax.set_axis_off()
-    else:
-        counts.head(max(settings.plot_max_per_reason, 1)).plot(kind="bar", ax=ax)
-        ax.set_ylabel("events")
-        ax.set_title("Preprocessing QC reasons")
-        ax.tick_params(axis="x", labelrotation=30)
-    fig.tight_layout()
-    fig.savefig(flagged_plots_dir / "qc_reason_counts.png", dpi=150)
-    plt.close(fig)
-
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    if neural_inputs.size == 0:
-        ax.text(0.5, 0.5, "No retained neural samples", ha="center", va="center")
-        ax.set_axis_off()
-    else:
-        ax.plot(neural_inputs[0])
-        ax.set_title("First retained neural input")
-        ax.set_xlabel("flattened feature index")
-    fig.tight_layout()
-    fig.savefig(flagged_plots_dir / "retained_sample_preview.png", dpi=150)
-    plt.close(fig)
-
-
-def _count_events_with_reason(event_qc: pd.DataFrame, *, reason: str) -> int:
-    if event_qc.empty:
-        return 0
-    return int(event_qc.loc[event_qc["discard_reason"] == reason, "event_id"].nunique())
-
-
-def _count_events_with_true_failures(event_qc: pd.DataFrame) -> int:
-    if event_qc.empty:
-        return 0
-    return int(
-        event_qc.loc[event_qc["discard_reason"].isin(TRUE_QC_FAILURE_REASONS), "event_id"].nunique()
     )

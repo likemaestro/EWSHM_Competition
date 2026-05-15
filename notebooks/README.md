@@ -15,7 +15,7 @@ Notebooks are numbered sequentially so they tell a story from
 raw data exploration through to the final health score:
 
 | Notebook | Purpose | Status |
-|---|---|---|
+| --- | --- | --- |
 | `01_sensor_overview` | Dataset structure, raw waveform plots | Done |
 | `02_preprocessing` | Filtering, zeroing, alignment | Done |
 | `03_feature_extraction` | FDD, peak picking, and mode shapes | Done |
@@ -27,7 +27,7 @@ distinguished from the numbered main storyline. Continue the series as
 `A_`, `B_`, `C_`, and so on:
 
 | Notebook | Purpose |
-|---|---|
+| --- | --- |
 | `misc/A_temperature_correlations` | Exploratory temperature-correlation analysis |
 
 ## How to run
@@ -63,9 +63,11 @@ order: **signal filtering → zeroing → alignment**.
 - **Duration filtering:** `summarize_min_duration_filter()` runs across all
   five SETs to report keep/drop counts. `find_common_sensor_events()` then
   restricts to events present in every selected sensor.
-- **Signal filtering:** `filter_loaded_event_group()` applies a 0.5–20 Hz
-  zero-phase Butterworth band-pass filter before any baseline or timing
-  correction. A raw-vs-filtered overlay is shown for up to three ACC_Z channels.
+- **Signal filtering:** `filter_loaded_event_group()` applies signal-specific
+  filtering before any baseline or timing correction. In the current v1
+  workflow, strain uses `none` while ACC_Z uses a 0.5–20 Hz zero-phase
+  Butterworth band-pass filter. A raw-vs-filtered overlay is shown for up to
+  three ACC_Z channels.
 - **Zeroing:** `zero_loaded_event_group()` subtracts the linear baseline
   (endpoint-to-endpoint straight line) from each filtered sensor slice.
   Before/after plots are shown in separate cells so the team can compare them

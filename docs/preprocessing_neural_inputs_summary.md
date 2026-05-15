@@ -48,9 +48,9 @@ We revised the AQUINAS Toolkit preprocessing stage so its primary output is a ne
   - ACC_Z aligned length at or above `min_aligned_samples`
 - In the current fresh run, incomplete selected-sensor coverage excluded `5329` events and packaging constraints excluded `0` events.
 
-## Sensor Override Audit
+## Sensor Override Summary
 
-- The preprocess stage still writes `sensor_qc_report.csv`, but only as an audit artifact for configured sensor exclusions such as the documented damaged sensor in SET4 and SET5.
+- Configured sensor exclusions such as the documented damaged sensor in SET4 and SET5 are recorded through `sensor_records.csv`, `event_manifest.csv`, and `summary.json`.
 - `report/neural_input_summary.json` records:
   - total retained preprocess events checked
   - events with complete selected-sensor coverage
