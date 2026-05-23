@@ -728,7 +728,7 @@ class LegacyPreprocessCsvReader:
             return pd.DataFrame(columns=output_columns)
 
         parsed = sensor_records["sensor_name"].map(parse_sensor_name).apply(pd.Series)
-        parsed = parsed[["span", "side", "location", "quantity", "axis"]]
+        parsed = parsed[["span", "side", "location", "quantity", "axis"]].reset_index(drop=True)
         sensor_records = pd.concat([sensor_records.reset_index(drop=True), parsed], axis=1)
         if quantity is not None:
             sensor_records = sensor_records.loc[sensor_records["quantity"] == quantity].copy()

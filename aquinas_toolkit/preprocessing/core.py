@@ -19,6 +19,7 @@ from aquinas_toolkit.io import AquinasReader
 
 
 EVENT_REQUIRED_COLUMNS = ("File", "Start_Row", "End_Row", "Start_Time", "End_Time")
+EVENT_GROUPING_METHODS = {"exact_window", "shared_start"}
 
 
 @dataclass(frozen=True)
@@ -64,13 +65,16 @@ def find_events(
     deck: str | None = None,
     sensor_pattern: str | None = None,
     records: pd.DataFrame | None = None,
+    grouping_method: str = "exact_window",
 ) -> pd.DataFrame:
     """
     Return grouped events for one dataset folder.
 
-    Events are grouped by exact ``deck + Start_Time + End_Time``. When
-    ``timestamp`` is provided, matching uses strict organizer-style
-    containment: ``Start_Time < timestamp < End_Time``.
+    ``exact_window`` groups records by exact ``deck + Start_Time + End_Time``.
+    ``shared_start`` groups records by ``deck + Start_Time`` and uses the maximum
+    grouped ``End_Time`` as the event end. When ``timestamp`` is provided,
+    matching uses strict organizer-style containment:
+    ``Start_Time < timestamp < End_Time``.
     """
     prepared_records = records if records is not None else prepare_sensor_records(reader)
     filtered_records = filter_sensor_records(
@@ -78,6 +82,7 @@ def find_events(
         deck=deck,
         sensor_pattern=sensor_pattern,
     )
+    filtered_records = assign_event_groups(filtered_records, method=grouping_method)
 
     grouped = group_sensor_records(filtered_records)
     if timestamp is not None:
@@ -121,12 +126,14 @@ def load_event_group(
         waveforms[sensor_name] = (meta, waveform)
 
     first_row = collapsed.iloc[0]
+    event_start_time = first_row.get("event_start_time_utc", first_row["start_time_utc"])
+    event_end_time = first_row.get("event_end_time_utc", first_row["end_time_utc"])
     return LoadedEventGroup(
         event_id=str(first_row["event_id"]),
         set_name=str(first_row["set_name"]),
         deck=str(first_row["deck"]),
-        start_time_utc=parse_utc_timestamp(first_row["start_time_utc"]),
-        end_time_utc=parse_utc_timestamp(first_row["end_time_utc"]),
+        start_time_utc=parse_utc_timestamp(event_start_time),
+        end_time_utc=parse_utc_timestamp(event_end_time),
         sensor_records=collapsed,
         waveforms=waveforms,
         zeroing_method="none",
@@ -212,18 +219,38 @@ def prepare_sensor_records(reader: AquinasReader) -> pd.DataFrame:
     records["end_row_1based"] = records[end_row_col].map(
         lambda value: reader.to_int(value, "End_Row")
     )
-    records["event_id"] = [
+    return assign_event_groups(records, method="exact_window")
+
+
+def assign_event_groups(records: pd.DataFrame, *, method: str) -> pd.DataFrame:
+    """Assign deterministic grouped event IDs without changing raw record timing."""
+    _validate_event_grouping_method(method)
+    grouped_records = records.copy()
+    if grouped_records.empty:
+        for column in ("event_start_time_utc", "event_end_time_utc", "event_id"):
+            if column not in grouped_records.columns:
+                grouped_records[column] = pd.Series(dtype=object)
+        return grouped_records
+
+    grouped_records["event_start_time_utc"] = grouped_records["start_time_utc"]
+    if method == "exact_window":
+        grouped_records["event_end_time_utc"] = grouped_records["end_time_utc"]
+    else:
+        grouped_records["event_end_time_utc"] = grouped_records.groupby(
+            ["set_name", "deck", "start_time_utc"], sort=False
+        )["end_time_utc"].transform("max")
+
+    grouped_records["event_id"] = [
         build_event_id(set_name, deck, start_time, end_time)
         for set_name, deck, start_time, end_time in zip(
-            records["set_name"],
-            records["deck"],
-            records["start_time_utc"],
-            records["end_time_utc"],
+            grouped_records["set_name"],
+            grouped_records["deck"],
+            grouped_records["event_start_time_utc"],
+            grouped_records["event_end_time_utc"],
             strict=True,
         )
     ]
-
-    return records
+    return grouped_records
 
 
 def filter_sensor_records(
@@ -296,7 +323,7 @@ def collapse_sensor_records(records: pd.DataFrame) -> pd.DataFrame:
 
 
 def group_sensor_records(records: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate one row per exact event window with organizer-order coverage."""
+    """Aggregate one row per grouped event with organizer-order coverage."""
     if records.empty:
         return pd.DataFrame(
             columns=[
@@ -309,19 +336,27 @@ def group_sensor_records(records: pd.DataFrame) -> pd.DataFrame:
                 "active_sensors",
             ]
         )
+    if "event_start_time_utc" not in records or "event_end_time_utc" not in records:
+        records = assign_event_groups(records, method="exact_window")
 
     ordered = records.sort_values(
-        ["set_name", "deck", "start_time_utc", "sensor_order", "start_row_1based"],
+        ["set_name", "deck", "event_start_time_utc", "sensor_order", "start_row_1based"],
         kind="mergesort",
     )
     grouped = (
         ordered.groupby(
-            ["event_id", "set_name", "deck", "start_time_utc", "end_time_utc"],
+            ["event_id", "set_name", "deck", "event_start_time_utc", "event_end_time_utc"],
             as_index=False,
         )
         .agg(
             active_sensor_count=("sensor_name", "nunique"),
             active_sensors=("sensor_name", lambda values: _ordered_unique(values.tolist())),
+        )
+        .rename(
+            columns={
+                "event_start_time_utc": "start_time_utc",
+                "event_end_time_utc": "end_time_utc",
+            }
         )
     )
     return grouped.sort_values(["set_name", "deck", "start_time_utc"], kind="mergesort").reset_index(
@@ -345,6 +380,8 @@ def format_timestamp_utc(value: Any) -> str:
 
 def _format_timestamp_token(value: Any) -> str:
     timestamp = parse_utc_timestamp(value)
+    if timestamp.microsecond:
+        return timestamp.strftime("%Y-%m-%dT%H-%M-%S.%f")[:-3] + "Z"
     return timestamp.strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
@@ -379,6 +416,12 @@ def _sensor_matches_pattern(sensor_name: str, sensor_pattern: str) -> bool:
     return normalized_pattern in normalized_name
 
 
+def _validate_event_grouping_method(method: str) -> None:
+    if method not in EVENT_GROUPING_METHODS:
+        supported = ", ".join(sorted(EVENT_GROUPING_METHODS))
+        raise ValueError(f"Unsupported event grouping method {method!r}. Supported methods: {supported}.")
+
+
 def _resolve_event_records(records: pd.DataFrame, event: str | Mapping[str, Any]) -> pd.DataFrame:
     if isinstance(event, str):
         matched = records.loc[records["event_id"] == event].copy()
@@ -386,16 +429,54 @@ def _resolve_event_records(records: pd.DataFrame, event: str | Mapping[str, Any]
         event_id = event.get("event_id")
         if event_id is not None:
             matched = records.loc[records["event_id"] == event_id].copy()
+            expected_sensor_count = int(event.get("active_sensor_count", 0) or 0)
+            matched_sensor_count = int(matched["sensor_name"].nunique()) if not matched.empty else 0
+            if (
+                _event_has_keys(event, ("deck", "start_time_utc", "end_time_utc"))
+                and matched_sensor_count < expected_sensor_count
+            ):
+                matched = _resolve_event_records_by_group_window(records, event)
         else:
-            deck = event.get("deck")
-            start_time = parse_utc_timestamp(event["start_time_utc"])
-            end_time = parse_utc_timestamp(event["end_time_utc"])
-            matched = records.loc[
-                (records["deck"] == deck)
-                & (records["start_time_utc"] == start_time)
-                & (records["end_time_utc"] == end_time)
-            ].copy()
+            matched = _resolve_event_records_by_group_window(records, event)
     return matched.reset_index(drop=True)
+
+
+def _resolve_event_records_by_group_window(
+    records: pd.DataFrame,
+    event: Mapping[str, Any],
+) -> pd.DataFrame:
+    deck = event.get("deck")
+    start_time = parse_utc_timestamp(event["start_time_utc"])
+    end_time = parse_utc_timestamp(event["end_time_utc"])
+    event_start_col = "event_start_time_utc" if "event_start_time_utc" in records else "start_time_utc"
+    event_end_col = "event_end_time_utc" if "event_end_time_utc" in records else "end_time_utc"
+    expected_sensor_count = int(event.get("active_sensor_count", 0) or 0)
+    matched = records.loc[
+        (records["deck"] == deck)
+        & (records[event_start_col] == start_time)
+        & (records[event_end_col] == end_time)
+    ].copy()
+    if not matched.empty and (
+        expected_sensor_count == 0 or int(matched["sensor_name"].nunique()) >= expected_sensor_count
+    ):
+        return matched
+
+    fallback = records.loc[
+        (records["deck"] == deck)
+        & (records["start_time_utc"] == start_time)
+        & (records["end_time_utc"] <= end_time)
+    ].copy()
+    if not fallback.empty:
+        fallback["event_start_time_utc"] = start_time
+        fallback["event_end_time_utc"] = end_time
+        fallback["event_id"] = str(
+            event.get("event_id") or build_event_id(str(fallback["set_name"].iloc[0]), str(deck), start_time, end_time)
+        )
+    return fallback
+
+
+def _event_has_keys(event: Mapping[str, Any], keys: tuple[str, ...]) -> bool:
+    return all(key in event for key in keys)
 
 
 def _load_waveform_from_record(reader: AquinasReader, meta: pd.Series) -> pd.DataFrame:

@@ -17,7 +17,9 @@ from aquinas_toolkit.cli.terminal import progress_context
 from aquinas_toolkit.io import AquinasReader, parse_sensor_name
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent, SYNCHRO_PASSES, align_event_group
 from aquinas_toolkit.preprocessing.core import (
+    EVENT_GROUPING_METHODS,
     LoadedEventGroup,
+    assign_event_groups,
     collapse_sensor_records,
     find_events,
     format_timestamp_utc,
@@ -89,7 +91,8 @@ class PreprocessingSettings:
     sampling_rate_hz: float = 100.0
     sensor_exclusions: tuple[SensorExclusion, ...] = ()
     selected_decks: tuple[str, ...] = ()
-    event_key_fields: tuple[str, ...] = ("deck", "Start_Time", "End_Time")
+    event_grouping_method: str = "shared_start"
+    event_key_fields: tuple[str, ...] = ("deck", "Start_Time")
     strain_filter_method: str = "none"
     strain_zeroing_method: str = "linear_endpoints"
     acc_filter_method: str = "butterworth_bandpass"
@@ -196,6 +199,7 @@ def _run_preprocess_sets(
         load_task = progress.add_task("  Reading sensor records...", total=None)
         reader = AquinasReader(settings.dataset_root / set_name)
         sensor_records = prepare_sensor_records(reader)
+        sensor_records = assign_event_groups(sensor_records, method=settings.event_grouping_method)
         if sensor_records.empty:
             progress.remove_task(load_task)
             progress.console.print("  [warning]No records found, skipping.[/]")
@@ -237,7 +241,11 @@ def _run_preprocess_sets(
         flush_event_sensor_rows: list[dict[str, Any]] = []
         set_aligned_partitions: dict[tuple[str, str], list[pd.DataFrame]] = defaultdict(list)
 
-        events = find_events(reader, records=included_sensor_records)
+        events = find_events(
+            reader,
+            records=included_sensor_records,
+            grouping_method=settings.event_grouping_method,
+        )
         event_task = progress.add_task("  Processing events", total=len(events))
         set_retained = 0
 
@@ -566,10 +574,15 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
         raise ValueError("Config must provide at least one dataset in data.sets.")
 
     sampling_rate_hz = float(preprocessing.get("sampling_rate_hz", 100.0))
+    event_grouping_method = str(event_grouping.get("method", "shared_start"))
+    _validate_event_grouping_method(event_grouping_method)
+    event_key_fields = tuple(
+        event_grouping.get("key_fields", _event_grouping_key_fields(event_grouping_method))
+    )
     selected_decks = tuple(str(value).upper() for value in sensor_selection.get("decks", ()) if str(value).strip())
     strain_locations = tuple(
         str(value).upper()
-        for value in strain_config.get("locations", ("INF", "SHE", "SUP"))
+        for value in strain_config.get("locations", ("INF", "SUP"))
         if str(value).strip()
     )
     peak_window_half_samples = int(strain_config.get("peak_window_half_samples", 100))
@@ -578,6 +591,9 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
     acc_min_aligned_samples = int(acc_config.get("min_aligned_samples", 500))
     if acc_min_aligned_samples <= 0:
         raise ValueError("preprocessing.acc.min_aligned_samples must be > 0.")
+    acc_axis = str(acc_config.get("axis", "Z")).upper()
+    if not acc_axis:
+        raise ValueError("preprocessing.acc.axis must not be empty.")
 
     legacy_signal_filter_method = str(signal_filter.get("method", "butterworth_bandpass"))
     _validate_filter_method(legacy_signal_filter_method, "preprocessing.signal_filter.method")
@@ -628,7 +644,8 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
         sampling_rate_hz=sampling_rate_hz,
         sensor_exclusions=sensor_exclusions,
         selected_decks=selected_decks,
-        event_key_fields=tuple(event_grouping.get("key_fields", ("deck", "Start_Time", "End_Time"))),
+        event_grouping_method=event_grouping_method,
+        event_key_fields=event_key_fields,
         strain_filter_method=strain_filter_method,
         strain_zeroing_method=strain_zeroing_method,
         acc_filter_method=acc_filter_method,
@@ -649,6 +666,7 @@ def load_preprocessing_settings(config_path: Path) -> PreprocessingSettings:
                 locations=strain_locations,
             ),
             acc=AccInputSettings(
+                axis=acc_axis,
                 min_aligned_samples=acc_min_aligned_samples,
                 low_hz=float(acc_frequency_transform.get("low_hz", acc_filter_low_hz)),
                 high_hz=float(acc_frequency_transform.get("high_hz", acc_filter_high_hz)),
@@ -668,6 +686,14 @@ def _validate_zeroing_method(method: str, config_key: str) -> None:
     if method not in ZEROING_METHODS:
         raise ValueError(
             f"Unsupported {config_key}: {method}. Supported methods are {sorted(ZEROING_METHODS)}."
+        )
+
+
+def _validate_event_grouping_method(method: str) -> None:
+    if method not in EVENT_GROUPING_METHODS:
+        raise ValueError(
+            "Unsupported preprocessing.event_grouping.method: "
+            f"{method!r}. Supported methods are {sorted(EVENT_GROUPING_METHODS)}."
         )
 
 
@@ -720,8 +746,8 @@ def annotate_sensor_records(
         axis = parsed["axis"]
         location = parsed["location"]
         is_strain = quantity == "STR" and str(location).upper() in settings.neural_inputs.strain.locations
-        is_acc_z = quantity == "ACC" and axis == "Z"
-        if not (is_strain or is_acc_z):
+        is_selected_acc = quantity == "ACC" and axis == settings.neural_inputs.acc.axis
+        if not (is_strain or is_selected_acc):
             annotated.at[index, "sensor_status"] = "excluded"
             annotated.at[index, "exclusion_reason"] = "channel not selected for neural preprocessing"
             annotated.at[index, "exclusion_source"] = "preprocessing sensor selection"
@@ -919,15 +945,27 @@ def _write_summary(
             "reference_policy": "first_selected",
             "passes": SYNCHRO_PASSES,
         },
-        "event_grouping": {"key_fields": list(settings.event_key_fields)},
+        "event_grouping": {
+            "method": settings.event_grouping_method,
+            "key_fields": _event_grouping_key_fields(settings.event_grouping_method),
+            "configured_key_fields": list(settings.event_key_fields),
+            "group_end_policy": _event_grouping_end_policy(settings.event_grouping_method),
+        },
         "sampling_rate_hz": settings.sampling_rate_hz,
         "sensor_selection": {
             "decks": list(settings.selected_decks),
-            "included_modalities": ["INF_STR", "SHE_STR", "SUP_STR", "ACC_Z"],
-            "excluded_modalities": ["ACC_Y"],
+            "included_modalities": [
+                *(f"{location}_STR" for location in settings.neural_inputs.strain.locations),
+                f"ACC_{settings.neural_inputs.acc.axis}",
+            ],
+            "excluded_modalities": [
+                axis
+                for axis in ("ACC_Y", "ACC_Z", "SHE_STR")
+                if axis != f"ACC_{settings.neural_inputs.acc.axis}"
+            ],
         },
         "neural_inputs": {
-            "path": str(path.parent / "neural_inputs.npy"),
+            "path": str(path.parent / "nn_inputs"),
             "report_dir": str(path.parent / "report"),
             "settings": asdict(settings.neural_inputs),
         },
@@ -1013,7 +1051,25 @@ def _settings_payload(settings: PreprocessingSettings) -> dict[str, Any]:
     payload["set_names"] = list(settings.set_names)
     payload["sensor_exclusions"] = [asdict(exclusion) for exclusion in settings.sensor_exclusions]
     payload["event_key_fields"] = list(settings.event_key_fields)
+    payload["event_grouping"] = {
+        "method": settings.event_grouping_method,
+        "key_fields": _event_grouping_key_fields(settings.event_grouping_method),
+        "configured_key_fields": list(settings.event_key_fields),
+        "group_end_policy": _event_grouping_end_policy(settings.event_grouping_method),
+    }
     return payload
+
+
+def _event_grouping_key_fields(method: str) -> list[str]:
+    if method == "shared_start":
+        return ["deck", "Start_Time"]
+    return ["deck", "Start_Time", "End_Time"]
+
+
+def _event_grouping_end_policy(method: str) -> str:
+    if method == "shared_start":
+        return "max_end"
+    return "exact_end"
 
 
 def _normalize_optional_scalar(value: Any) -> Any:

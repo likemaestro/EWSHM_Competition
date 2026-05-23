@@ -117,6 +117,15 @@ not a scored pipeline stage.
   controlled by `exports.aligned_waveforms.enabled`.
 - `exports.aligned_waveforms.format` supports `csv.gz` (default) and `csv`
   for optional CSV exports.
+- Neural-input packaging writes only model-facing row artifacts at the top
+  of `stages/preprocess/nn_inputs/`: `strain_inputs.npy`, `acc_inputs.npy`,
+  `temperature_inputs.npy`, and `event_ids.npy`. `event_ids.npy` is row
+  traceability, not a model feature tensor.
+- Neural-input metadata belongs under `stages/preprocess/nn_inputs/metadata/`.
+  Do not write sensor maps, manifests, shapes, frequency bins, valid lengths,
+  summaries, or temperature metadata directly under `nn_inputs/`. Old result
+  folders with top-level metadata should be regenerated, not supported through
+  compatibility fallbacks.
 
 ## Preprocessing public API
 

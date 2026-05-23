@@ -34,7 +34,7 @@ def _sha256_of(path: Path) -> str:
 
 def test_load_dataset_layout_defaults_without_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    layout = load_dataset_layout()
+    layout = load_dataset_layout(config_path=tmp_path / "missing.yaml")
     assert layout.dataset_root == find_workspace_root() / "AQUINAS_DATASET"
     assert len(layout.set_names) == 5
     assert layout.set_names[0] == "AQUINAS_SET1_2022_07"

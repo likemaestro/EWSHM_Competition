@@ -55,6 +55,7 @@ def test_main_shows_usage_when_no_subcommand(
     assert "info" in captured.out
     assert "data" in captured.out
     assert "viz" in captured.out
+    assert "preprocess" in captured.out
     assert captured.err == ""
 
 
@@ -96,7 +97,7 @@ def test_main_fails_for_unknown_subcommand(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Unknown command: unknown" in captured.err
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "Use `aquinas --help` for full usage." in captured.out
     assert "AQUINAS CLI" not in captured.out
 
@@ -118,7 +119,7 @@ def test_main_typo_hint_for_info_command(
     captured = capsys.readouterr()
     assert "Identity theft is not a joke, Jim. Millions of commands suffer every year." in captured.out
     assert "Did you mean `info`?" in captured.out
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "Use `aquinas --help` for full usage." in captured.out
     assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: infp" in captured.err
@@ -136,7 +137,7 @@ def test_main_typo_hint_for_inserted_info_character(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `info`?" in captured.out
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: infof" in captured.err
 
@@ -153,7 +154,7 @@ def test_main_typo_hint_for_viz_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `viz`?" in captured.out
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "Unknown command: vzi" in captured.err
 
 
@@ -169,7 +170,7 @@ def test_main_typo_hint_for_run_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean `run`?" in captured.out
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "Unknown command: rn" in captured.err
 
 
@@ -210,7 +211,7 @@ def test_main_does_not_hint_for_distant_unknown_command(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "Did you mean" not in captured.out
-    assert "Available commands: run, info, data, viz, about, version, help" in captured.out
+    assert "Available commands: run, info, data, viz, preprocess, about, version, help" in captured.out
     assert "Use `aquinas --help` for full usage." in captured.out
     assert "AQUINAS CLI" not in captured.out
     assert "Unknown command: spreadsheets" in captured.err
@@ -290,6 +291,24 @@ def test_data_help_mentions_fetch(
     assert "aquinas data path" in captured.out
     assert "--force" in captured.out
     assert "--assume-yes" in captured.out
+
+
+def test_preprocess_help_mentions_quicklook(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aquinas_toolkit.cli import preprocess as preprocess_mod
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "preprocess", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        preprocess_mod.run()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "AQUINAS PREPROCESS" in captured.out
+    assert "aquinas preprocess quicklook" in captured.out
+    assert "--event-index" in captured.out
+    assert "--summary" in captured.out
 
 
 def test_data_status_reports_complete_dataset(

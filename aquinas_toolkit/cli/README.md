@@ -13,7 +13,7 @@ script in `pyproject.toml`.
 | `aquinas run [--name NAME]` | Create a new run and execute the full pipeline, then refresh the visualization bundle when dataset inputs are available |
 | `aquinas run preprocess [--name NAME]` | Create a new run and execute only preprocessing, then refresh the visualization bundle when dataset inputs are available |
 | `aquinas run features [--run-id ID]` | Run feature extraction in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
-| `aquinas run train [--run-id ID]` | Run model training in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
+| `aquinas run train [--run-id ID]` | Prepare deterministic train/validation/test split indices and normalization stats for NN inputs, then refresh the visualization bundle |
 | `aquinas run score [--run-id ID]` | Run health score computation in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas info` | Show dataset summary (sensors, events, date ranges) |
 | `aquinas data fetch [--force] [--assume-yes] [--keep-zip]` | Download static dataset archive with Rich progress, verify SHA256, and extract to `data.dataset_root` |
@@ -22,6 +22,7 @@ script in `pyproject.toml`.
 | `aquinas data path` | Print the resolved dataset root path |
 | `aquinas viz build [--run-id ID]` | Explicitly rebuild the offline visualization bundle for a run |
 | `aquinas viz open [--run-id ID] [--host HOST] [--port PORT]` | Serve the visualization bundle over local HTTP and open it in the default browser |
+| `aquinas preprocess quicklook [--run-id ID]` | Inspect split NN input tensors and write quicklook plots for preprocess artifacts |
 | `aquinas --about` / `aquinas about` | Show toolkit metadata and maintainers |
 | `aquinas --version` / `aquinas version` | Show installed CLI version |
 

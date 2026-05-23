@@ -28,7 +28,7 @@ preprocessing:
   sensor_selection:
     decks: [OLD]                           # Selected bridge deck(s) for NN preprocessing, e.g. [OLD].
   strain:
-    locations: [INF, SHE, SUP]             # Strain-type sensor locations included in NN preprocessing.
+    locations: [INF, SUP]                  # Strain locations included in NN preprocessing; SHE/inclined strain is excluded.
     filter:
       method: none                         # Strain filtering policy; none means strain is not band-pass filtered.
     zeroing:
@@ -54,7 +54,9 @@ preprocessing:
       low_hz: 0.5                          # Lowest retained ACC-Z FFT frequency bin in Hz.
       high_hz: 20.0                        # Highest retained ACC-Z FFT frequency bin in Hz.
   event_grouping:
-    key_fields: [deck, Start_Time, End_Time]
+    method: shared_start                  # Group same physical passages by deck + Start_Time before alignment.
+    key_fields: [deck, Start_Time]
+    group_end_policy: max_end             # Event end is the maximum sensor End_Time in the shared-start group.
   sensor_overrides:
     exclude:
       - sensor_name: OLD_S1_UP_SUP_STR
@@ -92,12 +94,16 @@ features:
     n_peaks: 3
 
 # ---------------------------------------------------------------------------
-# Unsupervised model  (TODO)
+# Training data preparation
 # ---------------------------------------------------------------------------
-# model:
-#   type: pca             # pca | isolation_forest | autoencoder
-#   n_components: 10
-#   contamination: auto
+training:
+  random_seed: 2026
+  split:
+    train: 0.70
+    validation: 0.20
+    test: 0.10
+  standardization:
+    enabled: true
 
 # ---------------------------------------------------------------------------
 # Health scoring  (TODO)

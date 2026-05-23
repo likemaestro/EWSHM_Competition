@@ -65,7 +65,9 @@ def _write_default_preprocess_config(
         [
             "preprocessing:",
             "  event_grouping:",
-            "    key_fields: [deck, Start_Time, End_Time]",
+            "    method: shared_start",
+            "    key_fields: [deck, Start_Time]",
+            "    group_end_policy: max_end",
             "  alignment:",
             "    method: r_synchro",
             "  zeroing:",
@@ -394,6 +396,55 @@ def _build_widening_dataset(workspace: Path) -> Path:
     return dataset_root
 
 
+def _build_shared_start_mismatched_end_dataset(workspace: Path) -> Path:
+    dataset_root = workspace / "AQUINAS_DATASET"
+    set_dir = dataset_root / "AQUINAS_SET1_2022_07"
+    set_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_sensor(
+        set_dir,
+        "NEW_S1_DO_INF_STR",
+        table_payload={
+            "Record_UID": [1],
+            "File": ["NEW_S1_DO_INF_STR_SET1_1.json"],
+            "Start_Row": [1],
+            "End_Row": [3],
+            "Start_Time": ["2022-07-01 00:00:00"],
+            "End_Time": ["2022-07-01 00:00:02"],
+            "Duration": [2.0],
+            "Temperature": [21.0],
+        },
+        timestamps=[
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:01.000",
+            "2022-07-01 00:00:02.000",
+        ],
+        values=[10.0, 11.0, 12.0],
+    )
+    _write_sensor(
+        set_dir,
+        "NEW_S1_DO_SUP_STR",
+        table_payload={
+            "Record_UID": [2],
+            "File": ["NEW_S1_DO_SUP_STR_SET1_1.json"],
+            "Start_Row": [1],
+            "End_Row": [4],
+            "Start_Time": ["2022-07-01 00:00:00"],
+            "End_Time": ["2022-07-01 00:00:03"],
+            "Duration": [3.0],
+            "Temperature": [21.0],
+        },
+        timestamps=[
+            "2022-07-01 00:00:00.000",
+            "2022-07-01 00:00:01.000",
+            "2022-07-01 00:00:02.000",
+            "2022-07-01 00:00:03.000",
+        ],
+        values=[20.0, 21.0, 22.0, 23.0],
+    )
+    return dataset_root
+
+
 def _build_mixed_timestamp_dataset(workspace: Path) -> Path:
     dataset_root = workspace / "AQUINAS_DATASET"
     set_dir = dataset_root / "AQUINAS_SET1_2022_07"
@@ -707,6 +758,19 @@ def _add_partial_neural_event(dataset_root: Path) -> None:
     )
 
 
+def _make_first_neural_event_shared_start_mismatched_end(dataset_root: Path) -> None:
+    sensor_name = "OLD_S1_DO_MID_ACC_Z"
+    table_path = (
+        dataset_root
+        / "AQUINAS_SET1_2022_07"
+        / f"TABLE_{sensor_name}_SET1.json"
+    )
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    table["End_Time"][0] = "2022-07-01 00:00:00.160"
+    table["Duration"][0] = 0.17
+    _write_json(table_path, table)
+
+
 def _write_sensor(
     set_dir: Path,
     sensor_name: str,
@@ -737,6 +801,53 @@ def test_find_events_uses_strict_timestamp_containment(tmp_path: Path) -> None:
     assert len(find_events(reader, deck="NEW", timestamp="2022-07-01 00:00:00")) == 0
     assert len(find_events(reader, deck="NEW", timestamp="2022-07-01 00:00:01")) == 1
     assert len(find_events(reader, deck="NEW", timestamp="2022-07-01 00:00:03")) == 0
+
+
+def test_find_events_shared_start_merges_same_start_different_end(tmp_path: Path) -> None:
+    dataset_root = _build_shared_start_mismatched_end_dataset(tmp_path)
+    reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+    events = find_events(reader, deck="NEW", grouping_method="shared_start")
+
+    assert len(events) == 1
+    event = events.iloc[0]
+    assert event["active_sensor_count"] == 2
+    assert event["active_sensors"] == ["NEW_S1_DO_INF_STR", "NEW_S1_DO_SUP_STR"]
+    assert event["end_time_utc"] == pd.Timestamp("2022-07-01 00:00:03", tz="UTC")
+    assert event["event_id"].endswith("__2022-07-01T00-00-03Z")
+
+
+def test_find_events_exact_window_preserves_same_start_different_end_split(
+    tmp_path: Path,
+) -> None:
+    dataset_root = _build_shared_start_mismatched_end_dataset(tmp_path)
+    reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+    events = find_events(reader, deck="NEW", grouping_method="exact_window")
+
+    assert len(events) == 2
+    assert events["active_sensor_count"].tolist() == [1, 1]
+    assert events["event_id"].str.endswith(
+        ("__2022-07-01T00-00-02Z", "__2022-07-01T00-00-03Z")
+    ).tolist() == [True, True]
+
+
+def test_load_event_group_shared_start_keeps_sensors_before_alignment(tmp_path: Path) -> None:
+    dataset_root = _build_shared_start_mismatched_end_dataset(tmp_path)
+    reader = AquinasReader(dataset_root / "AQUINAS_SET1_2022_07")
+
+    event = find_events(reader, deck="NEW", grouping_method="shared_start").iloc[0]
+    loaded = load_event_group(reader, event)
+    aligned = align_event_group(loaded)
+
+    assert loaded.end_time_utc == pd.Timestamp("2022-07-01 00:00:03", tz="UTC")
+    assert list(loaded.waveforms) == ["NEW_S1_DO_INF_STR", "NEW_S1_DO_SUP_STR"]
+    assert aligned.alignment_diagnostics["rows_after_alignment"] == 3
+    assert list(aligned.aligned_waveform.columns) == [
+        "timestamp_utc",
+        "NEW_S1_DO_INF_STR",
+        "NEW_S1_DO_SUP_STR",
+    ]
 
 
 def test_synchro_indices_match_organizer_semantics() -> None:
@@ -860,6 +971,30 @@ def test_load_preprocessing_settings_rejects_legacy_alignment_keys(tmp_path: Pat
     )
 
     with pytest.raises(ValueError, match="Legacy preprocessing.alignment keys"):
+        load_preprocessing_settings(config_path)
+
+
+def test_load_preprocessing_settings_rejects_unknown_event_grouping_method(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  event_grouping:",
+                "    method: broad_overlap",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="preprocessing.event_grouping.method"):
         load_preprocessing_settings(config_path)
 
 
@@ -1194,12 +1329,13 @@ def test_run_preprocess_defaults_to_sqlite_without_optional_exports(
     assert not (preprocess_dir / "exports").exists()
 
 
-def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample_counts(
+def test_run_preprocess_writes_split_nn_input_tensors_with_configured_sample_counts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     dataset_root = _build_neural_preprocessing_dataset(tmp_path)
+    _make_first_neural_event_shared_start_mismatched_end(dataset_root)
     _add_partial_neural_event(dataset_root)
     (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
     (tmp_path / "configs" / "default.yaml").write_text(
@@ -1250,21 +1386,57 @@ def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample
 
     latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
     preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
-    neural_inputs = np.load(preprocess_dir / "neural_inputs.npy")
+    nn_inputs_dir = preprocess_dir / "nn_inputs"
+    metadata_dir = nn_inputs_dir / "metadata"
+    strain_inputs = np.load(nn_inputs_dir / "strain_inputs.npy")
+    acc_inputs = np.load(nn_inputs_dir / "acc_inputs.npy")
+    temperature_inputs = np.load(nn_inputs_dir / "temperature_inputs.npy")
+    event_ids = np.load(nn_inputs_dir / "event_ids.npy")
     report_dir = preprocess_dir / "report"
     sensor_map = pd.read_csv(report_dir / "sensor_map.csv")
-    slices = json.loads((report_dir / "input_slices.json").read_text(encoding="utf-8"))
+    shapes = json.loads((metadata_dir / "input_shapes.json").read_text(encoding="utf-8"))
+    manifest = pd.read_csv(metadata_dir / "manifest.csv")
+    nn_manifest = json.loads((metadata_dir / "nn_inputs_manifest.json").read_text(encoding="utf-8"))
     neural_summary = json.loads((report_dir / "neural_input_summary.json").read_text(encoding="utf-8"))
+    summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
 
-    assert neural_inputs.shape == (1, 15)
-    assert slices["strain"]["shape"] == [4, 2]
-    assert slices["acc_z_frequency"]["shape"] == [3, 2]
-    assert slices["temperature"]["shape"] == [1]
+    assert not (preprocess_dir / "neural_inputs.npy").exists()
+    assert metadata_dir.is_dir()
+    assert (metadata_dir / "frequency_bins.npy").is_file()
+    assert (metadata_dir / "valid_lengths.npy").is_file()
+    assert (metadata_dir / "sensor_ids.json").is_file()
+    for old_metadata_name in (
+        "frequency_bins.npy",
+        "valid_lengths.npy",
+        "sensor_ids.json",
+        "input_shapes.json",
+        "manifest.csv",
+        "nn_inputs_manifest.json",
+        "neural_input_summary.json",
+        "sensor_map.csv",
+        "temperature_metadata.csv",
+    ):
+        assert not (nn_inputs_dir / old_metadata_name).exists()
+    assert strain_inputs.shape == (1, 4, 2)
+    assert acc_inputs.shape == (1, 3, 2)
+    assert temperature_inputs.shape == (1, 1)
+    assert event_ids.shape == (1,)
+    assert event_ids.astype(str).tolist()[0].endswith("__2022-07-01T00-00-00.160Z")
+    assert shapes["strain"]["shape"] == [1, 4, 2]
+    assert shapes["acc_z_frequency"]["shape"] == [1, 3, 2]
+    assert shapes["temperature"]["shape"] == [1, 1]
+    assert manifest["row_index"].tolist() == [0]
+    assert manifest["event_id"].tolist() == event_ids.astype(str).tolist()
+    assert nn_manifest["array_shapes"]["strain_inputs"] == [1, 4, 2]
     assert neural_summary["total_retained_preprocess_events"] == 2
     assert neural_summary["events_with_complete_selected_sensor_coverage"] == 1
     assert neural_summary["events_excluded_incomplete_selected_sensor_coverage"] == 1
     assert neural_summary["events_excluded_packaging_constraints"] == 0
     assert neural_summary["retained_events"] == 1
+    assert summary["event_grouping"]["method"] == "shared_start"
+    assert summary["event_grouping"]["group_end_policy"] == "max_end"
+    assert neural_summary["strain_channel_count"] == 2
+    assert neural_summary["acc_channel_count"] == 2
     assert (
         sensor_map.loc[sensor_map["sensor_name"] == "OLD_S1_DO_INT_ACC_Y", "include_flag"]
         .astype(bool)
@@ -1275,7 +1447,73 @@ def test_run_preprocess_writes_single_neural_input_tensor_with_configured_sample
     included = included.sort_values("global_model_channel_index", kind="mergesort")
     assert included["model_channel_id"].tolist() == ["STR00", "STR01", "ACCZ00", "ACCZ01"]
     assert included["global_model_channel_index"].astype(int).tolist() == [0, 1, 2, 3]
+    assert not included["sensor_name"].str.contains("_SHE_STR").any()
     assert (preprocess_dir / "report" / "neural_input_summary.json").is_file()
+
+
+def test_run_preprocess_exact_window_preserves_split_nn_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    dataset_root = _build_neural_preprocessing_dataset(tmp_path)
+    _make_first_neural_event_shared_start_mismatched_end(dataset_root)
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "configs" / "default.yaml").write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "preprocessing:",
+                "  sampling_rate_hz: 100.0",
+                "  sensor_selection:",
+                "    decks: [OLD]",
+                "  strain:",
+                "    locations: [INF, SUP]",
+                "    peak_window_half_samples: 2",
+                "  acc:",
+                "    min_aligned_samples: 4",
+                "    filter:",
+                "      method: none",
+                "  event_grouping:",
+                "    method: exact_window",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  signal_filter:",
+                "    method: none",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: linear_endpoints",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "output:",
+                "  results_dir: results",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    summary = json.loads((preprocess_dir / "summary.json").read_text(encoding="utf-8"))
+    neural_summary = json.loads(
+        (preprocess_dir / "report" / "neural_input_summary.json").read_text(encoding="utf-8")
+    )
+
+    assert summary["event_grouping"]["method"] == "exact_window"
+    assert summary["event_grouping"]["group_end_policy"] == "exact_end"
+    assert neural_summary["total_retained_preprocess_events"] == 2
+    assert neural_summary["events_with_complete_selected_sensor_coverage"] == 0
+    assert neural_summary["events_excluded_incomplete_selected_sensor_coverage"] == 2
+    assert neural_summary["retained_events"] == 0
 
 
 def test_run_preprocess_applies_signal_specific_zeroing(

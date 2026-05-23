@@ -41,13 +41,14 @@ class StrainInputSettings:
     """Settings for strain event clipping."""
 
     peak_window_half_samples: int = 100
-    locations: tuple[str, ...] = ("INF", "SHE", "SUP")
+    locations: tuple[str, ...] = ("INF", "SUP")
 
 
 @dataclass(frozen=True)
 class AccInputSettings:
     """Settings for acceleration frequency-domain inputs."""
 
+    axis: str = "Z"
     min_aligned_samples: int = 500
     low_hz: float = 0.5
     high_hz: float = 20.0
@@ -67,10 +68,17 @@ class NeuralInputSettings:
 class NeuralInputResult:
     """Summary of neural-input artifact generation."""
 
-    output_path: Path
+    nn_inputs_dir: Path
     report_dir: Path
+    strain_inputs_path: Path
+    acc_inputs_path: Path
+    temperature_inputs_path: Path
+    event_ids_path: Path
+    manifest_path: Path
     sample_count: int
-    feature_count: int
+    strain_shape: tuple[int, ...]
+    acc_shape: tuple[int, ...]
+    temperature_shape: tuple[int, ...]
     strain_channel_count: int
     acc_channel_count: int
     frequency_bin_count: int
@@ -81,10 +89,19 @@ def build_neural_inputs(
     *,
     settings: NeuralInputSettings,
 ) -> NeuralInputResult:
-    """Build the canonical flattened neural input tensor from preprocess outputs."""
-    output_path = preprocess_dir / "neural_inputs.npy"
+    """Build event-aligned neural input tensors from preprocess outputs."""
+    nn_inputs_dir = preprocess_dir / "nn_inputs"
+    metadata_dir = nn_inputs_dir / "metadata"
     report_dir = preprocess_dir / "report"
+    nn_inputs_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
+
+    strain_inputs_path = nn_inputs_dir / "strain_inputs.npy"
+    acc_inputs_path = nn_inputs_dir / "acc_inputs.npy"
+    temperature_inputs_path = nn_inputs_dir / "temperature_inputs.npy"
+    event_ids_path = nn_inputs_dir / "event_ids.npy"
+    manifest_path = metadata_dir / "manifest.csv"
 
     with open_preprocess_store(preprocess_dir) as store:
         sensors = store.list_sensors()
@@ -95,8 +112,10 @@ def build_neural_inputs(
             sensors,
             decks=settings.decks,
             strain_locations=settings.strain.locations,
+            acc_axis=settings.acc.axis,
         )
         sensor_map.to_csv(report_dir / "sensor_map.csv", index=False)
+        sensor_map.to_csv(metadata_dir / "sensor_map.csv", index=False)
 
         required_sensor_names = strain_sensors + acc_sensors
 
@@ -131,21 +150,36 @@ def build_neural_inputs(
             acc_lengths.append(int(result["acc_time"].shape[0]))
 
     frequency_bins = _frequency_bins(acc_lengths, settings=settings)
-    tensor_rows: list[np.ndarray] = []
+    strain_rows: list[np.ndarray] = []
+    acc_rows: list[np.ndarray] = []
+    temperature_rows_array: list[np.ndarray] = []
     event_ids: list[str] = []
+    manifest_rows: list[dict[str, Any]] = []
     temperature_rows: list[dict[str, Any]] = []
+    n_fft = max(acc_lengths) if acc_lengths else 0
 
     for candidate in candidates:
-        strain_flat = candidate["strain_window"].astype(np.float32, copy=False).reshape(-1)
+        strain_rows.append(candidate["strain_window"].astype(np.float32, copy=False))
         acc_frequency = _acc_frequency_block(
             candidate["acc_time"],
-            n_fft=max(acc_lengths),
+            n_fft=n_fft,
             frequency_bins=frequency_bins,
             settings=settings,
         )
         temperature = np.array([candidate["temperature_mean"]], dtype=np.float32)
-        tensor_rows.append(np.concatenate([strain_flat, acc_frequency.reshape(-1), temperature]))
+        acc_rows.append(acc_frequency)
+        temperature_rows_array.append(temperature)
         event_ids.append(candidate["event_id"])
+        manifest_rows.append(
+            {
+                "row_index": len(manifest_rows),
+                "event_id": candidate["event_id"],
+                "set_name": candidate["set_name"],
+                "deck": candidate["deck"],
+                "start_time_utc": candidate["start_time_utc"],
+                "end_time_utc": candidate["end_time_utc"],
+            }
+        )
         temperature_rows.append(
             {
                 "event_id": candidate["event_id"],
@@ -154,20 +188,45 @@ def build_neural_inputs(
             }
         )
 
-    if tensor_rows:
-        neural_inputs = np.vstack(tensor_rows).astype(np.float32, copy=False)
+    strain_window_samples = settings.strain.peak_window_half_samples * 2
+    if strain_rows:
+        strain_inputs = np.stack(strain_rows).astype(np.float32, copy=False)
+        acc_inputs = np.stack(acc_rows).astype(np.float32, copy=False)
+        temperature_inputs = np.vstack(temperature_rows_array).astype(np.float32, copy=False)
     else:
-        neural_inputs = np.empty((0, 0), dtype=np.float32)
+        strain_inputs = np.empty(
+            (0, strain_window_samples, len(strain_sensors)),
+            dtype=np.float32,
+        )
+        acc_inputs = np.empty((0, len(frequency_bins), len(acc_sensors)), dtype=np.float32)
+        temperature_inputs = np.empty((0, 1), dtype=np.float32)
 
-    np.save(output_path, neural_inputs)
-    np.save(report_dir / "event_ids.npy", np.array(event_ids, dtype=str))
-    np.save(report_dir / "frequency_bins.npy", frequency_bins.astype(np.float32, copy=False))
-    np.save(report_dir / "valid_lengths.npy", np.array(acc_lengths, dtype=np.int32))
+    event_ids_array = np.array(event_ids, dtype=str)
+    frequency_bins_array = frequency_bins.astype(np.float32, copy=False)
+    valid_lengths_array = np.array(acc_lengths, dtype=np.int32)
+
+    np.save(strain_inputs_path, strain_inputs)
+    np.save(acc_inputs_path, acc_inputs)
+    np.save(temperature_inputs_path, temperature_inputs)
+    np.save(event_ids_path, event_ids_array)
+    np.save(metadata_dir / "frequency_bins.npy", frequency_bins_array)
+    np.save(metadata_dir / "valid_lengths.npy", valid_lengths_array)
+    np.save(report_dir / "event_ids.npy", event_ids_array)
+    np.save(report_dir / "frequency_bins.npy", frequency_bins_array)
+    np.save(report_dir / "valid_lengths.npy", valid_lengths_array)
+
+    pd.DataFrame(manifest_rows).to_csv(manifest_path, index=False)
+    pd.DataFrame(manifest_rows).to_csv(report_dir / "manifest.csv", index=False)
+    pd.DataFrame(temperature_rows).to_csv(metadata_dir / "temperature_metadata.csv", index=False)
     pd.DataFrame(temperature_rows).to_csv(report_dir / "temperature_metadata.csv", index=False)
     _write_metadata_files(
+        nn_inputs_dir,
+        metadata_dir,
         report_dir,
         settings=settings,
-        neural_inputs=neural_inputs,
+        strain_inputs=strain_inputs,
+        acc_inputs=acc_inputs,
+        temperature_inputs=temperature_inputs,
         total_retained_preprocess_events=len(selected_retained_events),
         complete_coverage_events=complete_coverage_events,
         incomplete_coverage_events=incomplete_coverage_events,
@@ -175,13 +234,21 @@ def build_neural_inputs(
         strain_sensors=strain_sensors,
         acc_sensors=acc_sensors,
         frequency_bins=frequency_bins,
+        manifest_path=manifest_path,
     )
 
     return NeuralInputResult(
-        output_path=output_path,
+        nn_inputs_dir=nn_inputs_dir,
         report_dir=report_dir,
-        sample_count=int(neural_inputs.shape[0]),
-        feature_count=int(neural_inputs.shape[1]) if neural_inputs.ndim == 2 else 0,
+        strain_inputs_path=strain_inputs_path,
+        acc_inputs_path=acc_inputs_path,
+        temperature_inputs_path=temperature_inputs_path,
+        event_ids_path=event_ids_path,
+        manifest_path=manifest_path,
+        sample_count=int(strain_inputs.shape[0]),
+        strain_shape=tuple(int(value) for value in strain_inputs.shape),
+        acc_shape=tuple(int(value) for value in acc_inputs.shape),
+        temperature_shape=tuple(int(value) for value in temperature_inputs.shape),
         strain_channel_count=len(strain_sensors),
         acc_channel_count=len(acc_sensors),
         frequency_bin_count=len(frequency_bins),
@@ -203,6 +270,7 @@ def _build_sensor_map(
     *,
     decks: tuple[str, ...],
     strain_locations: tuple[str, ...],
+    acc_axis: str,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
     rows: list[dict[str, Any]] = []
     selected = sensors.copy()
@@ -221,7 +289,7 @@ def _build_sensor_map(
         str(row.sensor_name)
         for row in selected_rows
         if parse_sensor_name(str(row.sensor_name))["quantity"] == "ACC"
-        and parse_sensor_name(str(row.sensor_name))["axis"] == "Z"
+        and parse_sensor_name(str(row.sensor_name))["axis"] == acc_axis
     ]
     strain_index = {sensor_name: index for index, sensor_name in enumerate(strain_sensors)}
     acc_index = {sensor_name: index for index, sensor_name in enumerate(acc_sensors)}
@@ -233,16 +301,16 @@ def _build_sensor_map(
         axis = parsed["axis"]
         location = parsed["location"]
         is_strain = quantity == "STR" and str(location) in strain_locations
-        is_acc_z = quantity == "ACC" and axis == "Z"
-        include = is_strain or is_acc_z
+        is_selected_acc = quantity == "ACC" and axis == acc_axis
+        include = is_strain or is_selected_acc
         if is_strain:
             model_channel_index = strain_index[sensor_name]
             global_index = model_channel_index
             model_channel_id = f"STR{model_channel_index:02d}"
-        elif is_acc_z:
+        elif is_selected_acc:
             model_channel_index = acc_index[sensor_name]
             global_index = len(strain_sensors) + model_channel_index
-            model_channel_id = f"ACCZ{model_channel_index:02d}"
+            model_channel_id = f"ACC{acc_axis}{model_channel_index:02d}"
         else:
             model_channel_index = None
             global_index = None
@@ -328,6 +396,10 @@ def _prepare_candidate(
     return {
         "status": "keep",
         "event_id": str(event.event_id),
+        "set_name": str(getattr(event, "set_name", "")),
+        "deck": str(getattr(event, "deck", "")),
+        "start_time_utc": str(getattr(event, "start_time_utc", "")),
+        "end_time_utc": str(getattr(event, "end_time_utc", "")),
         "strain_window": strain_values[start:end, :],
         "acc_time": acc_values,
         "temperature_mean": temperature_mean,
@@ -360,10 +432,14 @@ def _acc_frequency_block(
 
 
 def _write_metadata_files(
+    nn_inputs_dir: Path,
+    metadata_dir: Path,
     report_dir: Path,
     *,
     settings: NeuralInputSettings,
-    neural_inputs: np.ndarray,
+    strain_inputs: np.ndarray,
+    acc_inputs: np.ndarray,
+    temperature_inputs: np.ndarray,
     total_retained_preprocess_events: int,
     complete_coverage_events: int,
     incomplete_coverage_events: int,
@@ -371,62 +447,94 @@ def _write_metadata_files(
     strain_sensors: list[str],
     acc_sensors: list[str],
     frequency_bins: np.ndarray,
+    manifest_path: Path,
 ) -> None:
     strain_window_samples = settings.strain.peak_window_half_samples * 2
-    strain_width = strain_window_samples * len(strain_sensors)
-    acc_width = len(frequency_bins) * len(acc_sensors)
-    slices = {
+    shapes = {
         "strain": {
-            "start": 0,
-            "stop": strain_width,
-            "shape": [
-                strain_window_samples,
-                len(strain_sensors),
-            ],
+            "path": "strain_inputs.npy",
+            "shape": list(strain_inputs.shape),
         },
         "acc_z_frequency": {
-            "start": strain_width,
-            "stop": strain_width + acc_width,
-            "shape": [len(frequency_bins), len(acc_sensors)],
+            "path": "acc_inputs.npy",
+            "shape": list(acc_inputs.shape),
+            "axis": settings.acc.axis,
         },
         "temperature": {
-            "start": strain_width + acc_width,
-            "stop": strain_width + acc_width + 1,
-            "shape": [1],
+            "path": "temperature_inputs.npy",
+            "shape": list(temperature_inputs.shape),
         },
+        "event_ids": {"path": "event_ids.npy", "shape": [int(strain_inputs.shape[0])]},
     }
-    (report_dir / "input_slices.json").write_text(
-        json.dumps(slices, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    (report_dir / "sensor_ids.json").write_text(
-        json.dumps({"strain": strain_sensors, "acc_z": acc_sensors}, indent=2),
-        encoding="utf-8",
-    )
+    sensor_ids = {"strain": strain_sensors, "acc_z": acc_sensors}
+    for directory in (metadata_dir, report_dir):
+        (directory / "input_shapes.json").write_text(
+            json.dumps(shapes, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (directory / "sensor_ids.json").write_text(
+            json.dumps(sensor_ids, indent=2),
+            encoding="utf-8",
+        )
+
     summary = {
-        "neural_inputs_shape": list(neural_inputs.shape),
+        "nn_inputs_dir": str(nn_inputs_dir),
+        "metadata_dir": str(metadata_dir),
+        "array_shapes": {
+            "strain_inputs": list(strain_inputs.shape),
+            "acc_inputs": list(acc_inputs.shape),
+            "temperature_inputs": list(temperature_inputs.shape),
+            "event_ids": [int(strain_inputs.shape[0])],
+        },
+        "manifest_path": str(manifest_path),
         "total_retained_preprocess_events": total_retained_preprocess_events,
         "events_with_complete_selected_sensor_coverage": complete_coverage_events,
         "events_excluded_incomplete_selected_sensor_coverage": incomplete_coverage_events,
         "events_excluded_packaging_constraints": packaging_rejected_events,
-        "retained_events": int(neural_inputs.shape[0]),
+        "retained_events": int(strain_inputs.shape[0]),
+        "strain_window_samples": strain_window_samples,
+        "frequency_bin_count": int(len(frequency_bins)),
+        "strain_channel_count": int(len(strain_sensors)),
+        "acc_channel_count": int(len(acc_sensors)),
+        "selected_acc_axis": settings.acc.axis,
         "settings": asdict(settings),
     }
-    (report_dir / "neural_input_summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+    nn_manifest = {
+        **summary,
+        "arrays": {
+            "strain_inputs": "strain_inputs.npy",
+            "acc_inputs": "acc_inputs.npy",
+            "temperature_inputs": "temperature_inputs.npy",
+            "event_ids": "event_ids.npy",
+            "frequency_bins": "metadata/frequency_bins.npy",
+            "valid_lengths": "metadata/valid_lengths.npy",
+        },
+        "channel_order": sensor_ids,
+        "sampling_rate_hz": settings.sampling_rate_hz,
+        "acc_frequency_range_hz": [settings.acc.low_hz, settings.acc.high_hz],
+        "selected_decks": list(settings.decks),
+        "selected_strain_locations": list(settings.strain.locations),
+        "selected_acc_axis": settings.acc.axis,
+    }
+    for path in (report_dir / "neural_input_summary.json", metadata_dir / "neural_input_summary.json"):
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    (metadata_dir / "nn_inputs_manifest.json").write_text(
+        json.dumps(nn_manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
     (report_dir / "preprocessing_summary.md").write_text(
         "\n".join(
             [
                 "# Preprocessing Summary",
                 "",
-                f"- Neural input shape: `{tuple(neural_inputs.shape)}`",
+                f"- Strain input shape: `{tuple(strain_inputs.shape)}`",
+                f"- ACC-{settings.acc.axis} input shape: `{tuple(acc_inputs.shape)}`",
+                f"- Temperature input shape: `{tuple(temperature_inputs.shape)}`",
                 f"- Retained preprocess events checked: `{total_retained_preprocess_events}`",
                 f"- Events with complete selected-sensor coverage: `{complete_coverage_events}`",
                 f"- Events excluded for incomplete selected-sensor coverage: `{incomplete_coverage_events}`",
                 f"- Events excluded by packaging constraints: `{packaging_rejected_events}`",
-                f"- Retained events: `{int(neural_inputs.shape[0])}`",
+                f"- Retained events: `{int(strain_inputs.shape[0])}`",
                 f"- Strain channels: `{len(strain_sensors)}`",
-                f"- ACC-Z channels: `{len(acc_sensors)}`",
+                f"- ACC-{settings.acc.axis} channels: `{len(acc_sensors)}`",
                 f"- Frequency bins: `{len(frequency_bins)}`",
             ]
         )

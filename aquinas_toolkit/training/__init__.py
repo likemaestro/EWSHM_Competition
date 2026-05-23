@@ -1,5 +1,25 @@
-"""Unsupervised model training for anomaly and trend detection.
+"""Training-stage data preparation for NN model experiments."""
 
-Status: stub — not yet implemented.
-See aquinas_toolkit/training/README.md for planned work.
-"""
+from aquinas_toolkit.training.data_prep import (
+    SplitSettings,
+    StandardizationSettings,
+    TrainingDataPrepResult,
+    TrainingDataSettings,
+    load_training_data_settings,
+    make_split_indices,
+    prepare_training_data,
+    run_training,
+    save_normalization_stats,
+)
+
+__all__ = [
+    "SplitSettings",
+    "StandardizationSettings",
+    "TrainingDataPrepResult",
+    "TrainingDataSettings",
+    "load_training_data_settings",
+    "make_split_indices",
+    "prepare_training_data",
+    "run_training",
+    "save_normalization_stats",
+]

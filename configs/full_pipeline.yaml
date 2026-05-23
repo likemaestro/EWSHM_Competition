@@ -17,7 +17,7 @@ data:
 preprocessing:
   sampling_rate_hz: 100.0                  # Raw signal sampling rate in Hz; converts sample counts to seconds and FFT bins.
   strain:
-    locations: [INF, SHE, SUP]             # Strain-type sensor locations included in NN preprocessing.
+    locations: [INF, SUP]                  # Strain locations included in NN preprocessing; SHE/inclined strain is excluded.
     filter:
       method: none                         # Strain filtering policy; none means strain is not band-pass filtered.
     zeroing:
@@ -43,7 +43,9 @@ preprocessing:
       low_hz: 0.5                          # Lowest retained ACC-Z FFT frequency bin in Hz.
       high_hz: 20.0                        # Highest retained ACC-Z FFT frequency bin in Hz.
   event_grouping:
-    key_fields: [deck, Start_Time, End_Time]
+    method: shared_start
+    key_fields: [deck, Start_Time]
+    group_end_policy: max_end
   sensor_overrides:
     exclude:
       - sensor_name: OLD_S1_UP_SUP_STR
@@ -75,6 +77,15 @@ features:
     nperseg: 1024
     noverlap: 512
     n_peaks: 3
+
+training:
+  random_seed: 2026
+  split:
+    train: 0.70
+    validation: 0.20
+    test: 0.10
+  standardization:
+    enabled: true
 
 output:
   results_dir: results

@@ -15,15 +15,16 @@ The active settings come from the snapped run config at
 
 This run uses only the `OLD` deck and only the following selected sensor groups:
 
-- strain sensors at locations `INF`, `SHE`, and `SUP`
+- strain sensors at locations `INF` and `SUP`
 - acceleration sensors on axis `Z` only
 
 This means:
 
 - `ACC_Y` is excluded from this run
-- the selected neural-input sensor set contains 20 channels total
-  - 12 strain channels
+- the selected neural-input sensor set contains 16 channels total
+  - 8 strain channels
   - 8 ACC_Z channels
+- `SHE_STR` is excluded as the inclined strain family for the NN input contract
 
 ## Event Definition
 
@@ -145,17 +146,17 @@ For this `SET1 / OLD` run:
 
 ## Canonical Neural-Input Event ID File
 
-The canonical event ID artifact for the current run is:
+The canonical NN row ID artifact for the current run is:
 
-- `results/2026-05-15T16-40-01Z/stages/preprocess/report/event_ids.npy`
+- `results/2026-05-15T16-40-01Z/stages/preprocess/nn_inputs/event_ids.npy`
 
 That file contains the retained neural-input `event_id` values in the same row order as
-`neural_inputs.npy`.
+the split NN input arrays under `stages/preprocess/nn_inputs/`.
 
 ## Final Note for Neural Network Usage
 
-Events that have all `20` selected sensors available are the ones used for the neural network input packaging in this run.
+Events that have all `16` selected sensors available are the ones used for the neural network input packaging in this run.
 
 In this run, packaging exclusions are `0`, so the `1352` events with complete selected-sensor coverage are exactly the events listed in:
 
-- `results/2026-05-15T16-40-01Z/stages/preprocess/report/event_ids.npy`
+- `results/2026-05-15T16-40-01Z/stages/preprocess/nn_inputs/event_ids.npy`

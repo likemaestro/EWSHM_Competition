@@ -2,7 +2,9 @@
 
 from aquinas_toolkit.preprocessing.alignment import AlignedEvent, align_event_group, synchro_indices
 from aquinas_toolkit.preprocessing.core import (
+    EVENT_GROUPING_METHODS,
     LoadedEventGroup,
+    assign_event_groups,
     find_events,
     load_event_group,
     load_timestamp_query_frames,
@@ -40,15 +42,26 @@ from aquinas_toolkit.preprocessing.neural_inputs import (
     build_neural_inputs,
     strain_peak_window_bounds,
 )
+from aquinas_toolkit.preprocessing.quicklook import (
+    NNInputArrays,
+    load_nn_input_arrays,
+    load_sensor_map,
+    nn_inputs_dir,
+    plot_nn_input_event,
+    random_event_indices,
+    summarize_nn_inputs,
+)
 
 
 __all__ = [
     "AlignedEvent",
+    "EVENT_GROUPING_METHODS",
     "LoadedEventGroup",
     "LegacyPreprocessCsvReader",
     "OrganizerQueryResult",
     "PreprocessWaveformMigrationWarning",
     "align_event_group",
+    "assign_event_groups",
     "detect_legacy_preprocess_waveforms",
     "export_aligned_event",
     "find_events",
@@ -75,4 +88,11 @@ __all__ = [
     "StrainInputSettings",
     "build_neural_inputs",
     "strain_peak_window_bounds",
+    "NNInputArrays",
+    "load_nn_input_arrays",
+    "load_sensor_map",
+    "nn_inputs_dir",
+    "plot_nn_input_event",
+    "random_event_indices",
+    "summarize_nn_inputs",
 ]

@@ -2,25 +2,41 @@
 
 ## Purpose
 
-Detect anomalies and long-term trends in the feature data using
-unsupervised methods. The dataset has no labels -- all approaches
-must be unsupervised (challenge rules).
+Prepare reproducible training data artifacts for the neural-network experiments.
+The challenge remains unsupervised: no labels are introduced here.
 
 ## Status
 
-Stub — not yet implemented.
+Partially implemented. `aquinas run train` currently performs deterministic
+data preparation only; full NN architecture training is still a later step.
 
-Planned work:
+## Current Interface
 
-- Dimensionality reduction (PCA, kernel PCA, autoencoders)
-- Statistical process control (Hotelling T^2, EWMA control charts)
-- Outlier detection (Isolation Forest, Local Outlier Factor)
-- Clustering-based approaches
+- **Input:** split event tensors from
+  `results/<run_id>/stages/preprocess/nn_inputs/`, with sensor and frequency
+  metadata from `results/<run_id>/stages/preprocess/nn_inputs/metadata/`
+- **Output:** train/validation/test index arrays and train-only
+  normalization statistics under `results/<run_id>/stages/train/`
 
-## Interface
+The stage writes:
 
-- **Input:** feature matrix from the features stage
-- **Output:** per-event anomaly scores and per-sensor trend indicators
+- `splits/train_indices.npy`
+- `splits/val_indices.npy`
+- `splits/test_indices.npy`
+- `splits/split_manifest.json`
+- `normalization_stats.npz`
+
+The split indices are applied to every input array so row `i` stays the same
+event across strain, ACC, temperature, and event-id artifacts.
+
+## Deferred Model Work
+
+The later model-training implementation can consume the prepared artifacts for:
+
+- attention-based architectures
+- latent-space plus temperature-informed architectures
+- reconstruction-error metrics such as MSE and MAE
+- latent-space visualization and downstream health-score design
 
 ## Organizer Notes Relevant To Future OMA Work
 
@@ -29,7 +45,7 @@ Planned work:
   into a longer pseudo-continuous signal.
 - This is forward-looking guidance only. It does not force OMA as the
   competition method, and it does not change the v1 preprocessing scope.
-- The preprocess stage now preserves event-clean aligned outputs so later
+- The preprocess stage preserves event-clean aligned outputs so later
   experiments can concatenate them if OMA becomes a selected path.
 - The organizer also noted that bridge frequencies for this type of
   structure are typically around 2-10 Hz, which supports the current

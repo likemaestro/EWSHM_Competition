@@ -179,6 +179,11 @@ def print_data_help() -> None:
     get_console().print(render_data_help())
 
 
+def print_preprocess_help() -> None:
+    """Render the ``aquinas preprocess`` help view."""
+    get_console().print(render_preprocess_help())
+
+
 def print_data_status(dataset_status: DatasetLayoutStatus) -> None:
     """Render a human-readable dataset status summary."""
     get_console().print(render_data_status(dataset_status))
@@ -330,6 +335,7 @@ def render_top_level_help() -> CLIView:
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
     commands.add_row("data <subcommand>", "Download and manage the local dataset copy.")
     commands.add_row("viz <subcommand>", "Build or open the offline bridge viewer bundle.")
+    commands.add_row("preprocess <subcommand>", "Inspect preprocess-stage artifacts.")
     commands.add_row("about / --about", "Show toolkit metadata and maintainers.")
     commands.add_row("version / --version", "Show installed CLI version.")
     commands.add_row("help", "Show this usage message.")
@@ -339,6 +345,7 @@ def render_top_level_help() -> CLIView:
             ("Stages", "preprocess, features, train, score"),
             ("Data", "Use `aquinas data fetch` to bootstrap AQUINAS_DATASET."),
             ("Viewer", "Use `aquinas viz build` to package an offline visualization."),
+            ("Preprocess", "Use `aquinas preprocess quicklook` to inspect NN input arrays."),
             ("About", "Use `aquinas --about` to show toolkit metadata."),
             ("Version", "Use `aquinas --version` to show the installed version."),
             ("--name", "Use only when creating a new run."),
@@ -356,6 +363,7 @@ def render_top_level_help() -> CLIView:
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
         "  data <subcommand>  Download and manage the local dataset copy.\n"
         "  viz <subcommand>  Build or open the offline bridge viewer bundle.\n"
+        "  preprocess <subcommand>  Inspect preprocess-stage artifacts.\n"
         "  about         Show toolkit metadata and maintainers.\n"
         "  version       Show installed CLI version.\n"
         "  help          Show this usage message.\n"
@@ -363,6 +371,7 @@ def render_top_level_help() -> CLIView:
         "  Stages: preprocess, features, train, score\n"
         "  Data: Use `aquinas data fetch` to bootstrap AQUINAS_DATASET.\n"
         "  Viewer: Use `aquinas viz build` to package an offline visualization.\n"
+        "  Preprocess: Use `aquinas preprocess quicklook` to inspect NN input arrays.\n"
         "  About: Use `aquinas --about` to show toolkit metadata.\n"
         "  Version: Use `aquinas --version` to show the installed version.\n"
         "  --name: Use only when creating a new run.\n"
@@ -406,7 +415,10 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
         "aquinas run features [--run-id ID]",
         "Run feature extraction in an existing run.",
     )
-    commands.add_row("aquinas run train [--run-id ID]", "Run model training in an existing run.")
+    commands.add_row(
+        "aquinas run train [--run-id ID]",
+        "Prepare train/validation/test splits for NN inputs in an existing run.",
+    )
     commands.add_row("aquinas run score [--run-id ID]", "Run scoring in an existing run.")
 
     options = _notes_table(
@@ -592,6 +604,70 @@ def render_data_help() -> CLIView:
     )
 
 
+def render_preprocess_help() -> CLIView:
+    """Build the ``aquinas preprocess`` help renderable."""
+    usage = Text(
+        "Usage: aquinas preprocess quicklook [--run-id ID] [--event-index INDEX]\n"
+        "       aquinas preprocess quicklook [--run-id ID] [--random N]\n"
+        "       aquinas preprocess quicklook [--run-id ID] [--summary] [--sensor-map]",
+        style="key",
+    )
+    commands = Table(
+        box=box.SIMPLE_HEAVY,
+        border_style="accent",
+        header_style="header",
+        expand=True,
+        show_lines=False,
+    )
+    commands.add_column("Invocation", style="key", no_wrap=True)
+    commands.add_column("Description")
+    commands.add_row(
+        "aquinas preprocess quicklook",
+        "Inspect split NN input arrays produced by the preprocess stage.",
+    )
+
+    options = _notes_table(
+        [
+            ("--run-id", "Existing run to inspect. Defaults to results/latest.json."),
+            ("--event-index", "Event row index to plot."),
+            ("--random", "Plot N deterministic random event rows."),
+            ("--summary", "Print shapes and finite-value diagnostics."),
+            ("--sensor-map", "Print included NN channel order."),
+            ("--output", "Output PNG path or directory."),
+        ]
+    )
+
+    plain_text = (
+        "Usage: aquinas preprocess quicklook [--run-id ID] [--event-index INDEX]\n"
+        "       aquinas preprocess quicklook [--run-id ID] [--random N]\n"
+        "       aquinas preprocess quicklook [--run-id ID] [--summary] [--sensor-map]\n\n"
+        "Subcommands:\n"
+        "  quicklook  Inspect split NN input arrays produced by the preprocess stage.\n"
+        "Options:\n"
+        "  --run-id       Existing run to inspect. Defaults to results/latest.json.\n"
+        "  --event-index  Event row index to plot.\n"
+        "  --random       Plot N deterministic random event rows.\n"
+        "  --summary      Print shapes and finite-value diagnostics.\n"
+        "  --sensor-map   Print included NN channel order.\n"
+        "  --output       Output PNG path or directory."
+    )
+
+    return CLIView(
+        Group(
+            Panel.fit(
+                Text("AQUINAS PREPROCESS", style="header"),
+                title="Preprocess Inspection Command",
+                border_style="accent",
+                box=box.ROUNDED,
+            ),
+            usage,
+            commands,
+            Panel(options, title="Options", border_style="accent", box=box.ROUNDED),
+        ),
+        plain_text,
+    )
+
+
 def render_data_status(dataset_status: DatasetLayoutStatus) -> CLIView:
     """Build a human-readable dataset readiness summary."""
     layout = dataset_status.layout
@@ -752,12 +828,13 @@ def render_typo_hint(*, command_name: str, suggested_command: str) -> CLIView:
 
 def render_compact_command_hint() -> CLIView:
     """Build a compact fallback hint for typo-triggered unknown commands."""
+    commands_text = "run, info, data, viz, preprocess, about, version, help"
     lines = Group(
-        Text("Available commands: run, info, data, viz, about, version, help", style="key"),
+        Text(f"Available commands: {commands_text}", style="key"),
         Text("Use `aquinas --help` for full usage.", style="muted"),
     )
     plain_text = (
-        "Available commands: run, info, data, viz, about, version, help\n"
+        f"Available commands: {commands_text}\n"
         "Use `aquinas --help` for full usage."
     )
     return CLIView(lines, plain_text)

@@ -12,7 +12,7 @@ import sys
 from aquinas_toolkit.cli import terminal
 
 
-_TOP_LEVEL_COMMANDS = ("run", "info", "data", "viz", "about", "version", "help")
+_TOP_LEVEL_COMMANDS = ("run", "info", "data", "viz", "preprocess", "about", "version", "help")
 
 
 def main() -> None:
@@ -22,6 +22,7 @@ def main() -> None:
         "info": "aquinas_toolkit.cli.info",
         "data": "aquinas_toolkit.cli.data",
         "viz": "aquinas_toolkit.cli.viz",
+        "preprocess": "aquinas_toolkit.cli.preprocess",
     }
 
     args = sys.argv[1:]

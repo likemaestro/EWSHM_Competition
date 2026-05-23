@@ -57,8 +57,10 @@ jupyter lab notebooks/
 implementation of preprocessing logic. It walks through the single pipeline in
 order: **signal filtering → zeroing → alignment**.
 
-- **Event discovery:** `find_events()` groups records by deck and exact
-  `Start_Time`/`End_Time` window. `timestamp=` uses strict containment
+- **Event discovery:** exploratory `find_events()` calls can use exact
+  windows, while the batch preprocess run now uses the configured
+  `shared_start` policy by default: deck + `Start_Time`, with event end set
+  to the maximum grouped `End_Time`. `timestamp=` uses strict containment
   (`Start_Time < timestamp < End_Time`); boundary values return nothing.
 - **Duration filtering:** `summarize_min_duration_filter()` runs across all
   five SETs to report keep/drop counts. `find_common_sensor_events()` then

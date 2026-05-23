@@ -43,6 +43,7 @@ STAGE_PACKAGE_DIRS = {
 _STAGE_REGISTRY: dict[str, str] = {
     "preprocess": "aquinas_toolkit.preprocessing:run_preprocessing",
     "features": "aquinas_toolkit.feature_extraction:run_features",
+    "train": "aquinas_toolkit.training:run_training",
 }
 
 

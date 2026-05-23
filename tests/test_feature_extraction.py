@@ -53,6 +53,8 @@ def _write_feature_pipeline_config(workspace: Path, *, axis: str = "Z") -> None:
             "    method: linear_endpoints",
             "  filtering:",
             "    min_active_sensors_per_event: 1",
+            "  acc:",
+            f"    axis: {axis}",
             "  storage:",
             "    backend: sqlite",
             "  exports:",
@@ -164,6 +166,12 @@ def _build_feature_stage_dataset(workspace: Path) -> Path:
     _write_sensor_with_two_events(
         set_dir,
         sensor_name="OLD_S1_DO_MID_ACC_Z",
+        values=old_acc.tolist(),
+        timestamps=all_timestamps,
+    )
+    _write_sensor_with_two_events(
+        set_dir,
+        sensor_name="OLD_S1_DO_INT_ACC_Y",
         values=old_acc.tolist(),
         timestamps=all_timestamps,
     )

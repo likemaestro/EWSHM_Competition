@@ -20,11 +20,18 @@ Pipeline order: **signal filtering → zeroing → alignment**
 
 ## Interface
 
-- **Input:** raw waveform DataFrames from `AquinasReader`, grouped by
-  exact event windows within each deck
+- **Input:** raw waveform DataFrames from `AquinasReader`, grouped by the
+  configured event policy within each deck (`shared_start` by default)
 - **Output:** SQLite-backed preprocess artifacts plus per-event waveform
-  `.npy` / `.meta.json` files, manifest and audit artifacts, and
-  `neural_inputs.npy` under `results/<run_id>/stages/preprocess/`
+  `.npy` / `.meta.json` files, manifest and audit artifacts, and split
+  event-level NN tensors under `results/<run_id>/stages/preprocess/nn_inputs/`
+  with tensor metadata under `nn_inputs/metadata/`
+
+The canonical NN input directory keeps only `strain_inputs.npy`,
+`acc_inputs.npy`, `temperature_inputs.npy`, and row-traceability
+`event_ids.npy` at the top level. Sensor maps, manifests, shapes, frequency
+bins, valid lengths, summaries, and temperature metadata belong in
+`nn_inputs/metadata/`.
 
 ## Public API
 
@@ -35,6 +42,8 @@ from aquinas_toolkit.preprocessing import (
     zero_loaded_event_group,      # step 2: baseline removal
     align_event_group,            # step 3: timestamp alignment
     # Event discovery and loading
+    EVENT_GROUPING_METHODS,
+    assign_event_groups,
     find_events,
     load_event_group,
     load_timestamp_query_frames,
@@ -68,7 +77,8 @@ Key symbols:
 | `zero_loaded_event_group()` | function | Apply baseline removal to each filtered sensor slice before alignment |
 | `zero_waveform()` | function | Apply a zeroing method to a single waveform array |
 | `align_event_group()` | function | Two-pass `Synchro()` alignment, first-selected reference, no interpolation |
-| `find_events()` | function | Group records by `set + deck + Start_Time + End_Time` with optional timestamp/sensor filters |
+| `assign_event_groups()` | function | Assign deterministic grouped event IDs using `exact_window` or `shared_start` semantics |
+| `find_events()` | function | Group records with `exact_window` or `shared_start` event semantics plus optional timestamp/sensor filters |
 | `load_event_group()` | function | Load all raw waveforms that belong to one grouped event |
 | `load_timestamp_query_frames()` | function | Reproduce organizer-style timestamp selection for one deck/sensor subset |
 | `run_organizer_query()` | function | Return organizer-style aligned `DataMesures` output for one timestamp query |
@@ -86,8 +96,14 @@ Key symbols:
 
 ## Event Selection Semantics
 
-- `find_events()` groups records by exact
-  `set + deck + Start_Time + End_Time` before applying filters.
+- `find_events()` supports two event grouping methods. `exact_window`
+  groups records by exact `set + deck + Start_Time + End_Time`.
+  `shared_start` groups records by `set + deck + Start_Time` and sets the
+  event end to the maximum grouped `End_Time`.
+- `run_preprocessing()` uses `preprocessing.event_grouping.method`, which
+  defaults to `shared_start`. This keeps sensors from the same physical
+  vehicle passage together before alignment when their end times differ
+  slightly.
 - `deck="OLD"` or `deck="NEW"` is an exact filter on the derived deck
   token. It is not partial matching on the full sensor name.
 - `timestamp=` in `find_events()` is a strict containment query:
@@ -195,7 +211,8 @@ See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.
 
 - Signal-specific conditioning before alignment: unfiltered strain and
   Butterworth-filtered ACC_Z by default
-- Exact event grouping with `set + deck + Start_Time + End_Time`
+- Configurable event grouping: `shared_start` by default, with
+  `exact_window` kept for legacy comparisons
 - Organizer-style strict timestamp containment for timestamp queries
 - Organizer `Synchro()` alignment without interpolation
 - Zeroing after filtering with organizer `linear_endpoints` as the default
@@ -243,8 +260,11 @@ Additional implementation notes:
   `tolerance_ms`, `drop_unmatched_rows`) are rejected.
 - `preprocessing.filtering.min_active_sensors_per_event` is the active
   pre-alignment inclusion threshold.
-- `preprocessing.event_grouping.key_fields` records the fixed v1
-  grouping contract.
+- `preprocessing.event_grouping.method` is active. `shared_start` groups by
+  deck and start time with `max_end`; `exact_window` preserves the old exact
+  start/end behavior.
+- `preprocessing.event_grouping.key_fields` and `group_end_policy` are
+  metadata traces of the active grouping contract.
 - `preprocessing.storage.backend` is active and currently only supports
   `sqlite`.
 - `preprocessing.exports.aligned_waveforms.enabled` and `format` control

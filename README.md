@@ -39,13 +39,13 @@
 
 - Research competition entry for an unsupervised, data-driven structural health score built from raw bridge measurements under the EWSHM Challenge 1 constraints
 - Python toolkit with implemented data access, preprocessing, feature-store generation, CLI workflows, and offline visualization for repeatable offline analysis
-- Current emphasis is robust preprocessing and feature extraction; training and global scoring remain intentionally stubbed while the run layout under `results/` is already reproducible
+- Current emphasis is robust preprocessing, NN-ready event tensors, feature extraction, and deterministic training-data preparation; global scoring remains intentionally stubbed while the run layout under `results/` is already reproducible
 
 ## Release
 
 Current milestone release: [`v0.1.0`](https://github.com/likemaestro/EWSHM_Competition/releases/tag/v0.1.0)
 
-This release covers the implemented reader, preprocessing, feature extraction, CLI workflow, and offline visualization bundle. `training/` and `scoring/` remain stubs, so the repository is released as an early milestone rather than a complete end-to-end competition pipeline.
+This release covers the implemented reader, preprocessing, feature extraction, CLI workflow, offline visualization bundle, and training-data split preparation. Full neural-network model training and `scoring/` remain pending, so the repository is still an early milestone rather than a complete end-to-end competition pipeline.
 
 ## The challenge
 
@@ -91,7 +91,7 @@ EWSHM_Competition/
 │   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
 │   ├── preprocessing/        Signal preprocessing                  [implemented]
 │   ├── feature_extraction/   Feature extraction                    [implemented]
-│   ├── training/             Unsupervised anomaly models           [stub]
+│   ├── training/             Split preparation for NN inputs       [partial]
 │   ├── utils/                Shared utilities (plotting)           [implemented]
 │   ├── scoring/              Health score synthesis                [stub]
 │   └── visualization/        Offline 3D bridge viewer              [implemented]
@@ -120,11 +120,11 @@ EWSHM_Competition/
 |---|---|---|
 | `aquinas_toolkit.io` | Implemented | `AquinasReader` loads index tables and raw waveforms |
 | `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
-| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess and features dispatch; train and score pending |
+| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess/features/train dispatch, preprocess quicklook, and score pending |
 | `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
-| `aquinas_toolkit.preprocessing` | Implemented | Signal-specific filtering -> zeroing -> alignment pipeline with manifests, SQLite artifacts, neural-input packaging, and sensor override audit outputs |
+| `aquinas_toolkit.preprocessing` | Implemented | Signal-specific filtering -> zeroing -> alignment pipeline with manifests, SQLite artifacts, split NN input tensors, quicklook inspection, and sensor override audit outputs |
 | `aquinas_toolkit.feature_extraction` | Implemented | FDD modal analysis plus per-sensor waveform statistics and SQLite feature storage |
-| `aquinas_toolkit.training` | Stub | Unsupervised anomaly and trend detection |
+| `aquinas_toolkit.training` | Partial | Deterministic train/validation/test split indices and train-only normalization stats for split NN inputs |
 | `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
 
 ## Organizer-Driven Preprocessing Notes
@@ -150,7 +150,8 @@ follow-up email from Francois-Baptiste Cartiaux:
 
 Pipeline order: **signal-specific filtering -> zeroing -> alignment**
 
-- groups events by deck and exact event window (`Start_Time` / `End_Time`)
+- groups events by deck and shared `Start_Time` by default, with event end
+  recorded as the maximum grouped `End_Time` before alignment
 - queries organizer-style timestamp windows with strict containment
 - leaves strain unfiltered and applies a zero-phase Butterworth band-pass
   filter (default 0.5-20 Hz) to ACC_Z before any baseline or timing correction
@@ -159,8 +160,9 @@ Pipeline order: **signal-specific filtering -> zeroing -> alignment**
   first selected sensor as reference, two shrinking passes, no interpolation
 - writes event manifests, sensor-record status tables, a canonical
   SQLite preprocess store, per-event waveform artifacts, neural-input
-  packaging reports, an audit report for the damaged-sensor override,
-  and a local Python-vs-R parity harness
+  arrays under `nn_inputs/`, neural-input metadata under
+  `nn_inputs/metadata/`, packaging reports, an audit report for the
+  damaged-sensor override, and a local Python-vs-R parity harness
 
 Team-facing details and rationale live in:
 
@@ -272,9 +274,10 @@ aquinas run --name baseline        # same, with an optional human-readable run n
 aquinas run preprocess             # create a new run and run preprocessing only
 aquinas run preprocess --name prep # same, with an optional human-readable run name
 aquinas run features               # continue from results/latest.json
-aquinas run train                  # continue from results/latest.json
+aquinas run train                  # prepare NN split indices and normalization stats
 aquinas run score                  # continue from results/latest.json
 aquinas run features --run-id 2026-03-31T21-45-00Z  # resume an older run explicitly
+aquinas preprocess quicklook --event-index 42       # inspect one preprocessed NN event row
 aquinas viz build                  # explicitly rebuild the viewer for the active run
 aquinas viz build --include-waveforms
 aquinas viz open                   # serve the viewer locally and open it in the default browser
@@ -399,7 +402,7 @@ What the viewer currently shows:
   and mean temperature
 - Sensor trends across the exported AQUINAS sets
 - Homologous sensor comparisons and capped correlation overlays
-- Deck-scoped event previews keyed by `dataset + deck + Start_Time + End_Time`
+- Deck-scoped event previews keyed by the configured event grouping policy
 
 Current limitation / WIP:
 

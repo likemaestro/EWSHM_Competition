@@ -7,16 +7,16 @@ We revised the AQUINAS Toolkit preprocessing stage so its primary output is a ne
 ## Main Pipeline Changes
 
 - Added neural input packaging under the preprocess stage.
-- The preprocess stage now writes one canonical `neural_inputs.npy`.
-- Verbose metadata artifacts are written beside it under `report/`, including sensor map, input slices, event IDs, frequency bins, and temperature metadata.
-- Flexible preprocessing is preserved: technically valid partial-sensor events remain in the preprocess store, while `neural_inputs.npy` only uses events with complete selected-sensor coverage.
+- The preprocess stage now writes split event-level tensors under `nn_inputs/`: `strain_inputs.npy`, `acc_inputs.npy`, `temperature_inputs.npy`, and `event_ids.npy`.
+- Verbose metadata artifacts are written under `nn_inputs/metadata/` and `report/`, including sensor map, input shapes, frequency bins, valid lengths, and temperature metadata.
+- Flexible preprocessing is preserved: technically valid partial-sensor events remain in the preprocess store, while the split NN arrays only use events with complete selected-sensor coverage.
 - Limited the current default dataset scope to `AQUINAS_SET1_2022_07` and the `OLD` deck.
 - Excluded ACC-Y from neural preprocessing and retained only ACC-Z.
 
 ## Signal-Specific Preprocessing
 
 - Replaced misleading global filter/zeroing intent with signal-specific preprocessing settings.
-- Strain-type sensors (`INF_STR`, `SUP_STR`, `SHE_STR`):
+- Strain-type sensors (`INF_STR`, `SUP_STR`):
   - no band-pass filtering
   - endpoint-line zeroing
   - peak-window clipping for neural input packaging
@@ -87,7 +87,7 @@ We revised the AQUINAS Toolkit preprocessing stage so its primary output is a ne
 - The notebook is an experiment harness for:
   - inspecting active config
   - optionally running preprocess
-  - loading `neural_inputs.npy`
+  - loading the split NN input arrays
   - reviewing sensor numbering
   - reviewing retained event coverage and tensor layout metadata
 
