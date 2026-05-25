@@ -2,8 +2,6 @@ name: Notebook checks
 
 on:
   pull_request:
-    paths:
-      - "notebooks/**/*.ipynb"
   workflow_dispatch:
 
 jobs:
