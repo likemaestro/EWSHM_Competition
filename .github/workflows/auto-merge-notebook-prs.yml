@@ -1,0 +1,50 @@
+name: Auto-merge notebook PRs
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+
+    steps:
+      - name: Enable auto-merge for notebook-only PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          files="$(
+            gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" \
+              --jq '.[].filename'
+          )"
+
+          if [[ -z "${files}" ]]; then
+            echo "No changed files found; skipping auto-merge."
+            exit 0
+          fi
+
+          while IFS= read -r file; do
+            if [[ ! "${file}" =~ \.ipynb$ ]]; then
+              echo "Non-notebook file changed: ${file}"
+              echo "Skipping auto-merge."
+              exit 0
+            fi
+          done <<< "${files}"
+
+          gh pr merge "${PR_URL}" --auto --squash
