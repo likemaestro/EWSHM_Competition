@@ -17,6 +17,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git ls-files 'notebooks/**/*.ipynb' | while IFS= read -r notebook; do
+          git ls-files | grep -E '\.ipynb$' | while IFS= read -r notebook; do
             python3 -m json.tool "$notebook" >/dev/null
           done
