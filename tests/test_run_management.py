@@ -112,6 +112,29 @@ def test_create_run_uses_configured_results_dir_and_initializes_metadata(
     assert (run_context.results_dir / "latest.json").is_file()
 
 
+def test_create_run_snapshots_explicit_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    custom_config = tmp_path / "configs" / "old_deck_all_sets.yaml"
+    custom_config.write_text(
+        "output:\n  results_dir: custom-results\npreprocessing:\n  sensor_selection:\n"
+        "    decks: [OLD]\n",
+        encoding="utf-8",
+    )
+
+    run_context = run_management.create_run(name="old-deck", config_path=custom_config)
+
+    assert run_context.results_dir == tmp_path / "custom-results"
+    assert run_context.config_path.read_text(encoding="utf-8") == custom_config.read_text(
+        encoding="utf-8"
+    )
+    metadata = run_management.read_metadata(run_context.run_dir)
+    assert metadata["name"] == "old-deck"
+
+
 def test_resolve_run_fails_when_config_snapshot_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

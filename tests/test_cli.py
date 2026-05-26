@@ -251,6 +251,7 @@ def test_run_help_mentions_name_and_run_id(
     assert "AQUINAS RUN" in captured.out
     assert "Usage: aquinas run" in captured.out
     assert "--name" in captured.out
+    assert "--config" in captured.out
     assert "--run-id" in captured.out
     assert "--verbose" in captured.out
 
@@ -521,6 +522,48 @@ def test_run_preprocess_creates_snapshot_and_metadata(
     assert not (run_dir / "stages" / "score").exists()
 
 
+def test_run_preprocess_snapshots_explicit_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    explicit_config = tmp_path / "configs" / "old_deck_all_sets.yaml"
+    explicit_config.write_text(
+        "data:\n  dataset_root: AQUINAS_DATASET\n"
+        "  sets:\n    - AQUINAS_SET1_2022_07\n"
+        "output:\n  results_dir: explicit-results\n"
+        "preprocessing:\n  sensor_selection:\n    decks: [OLD]\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(run_mod, "_execute_stage", lambda stage, run_context: None)
+    monkeypatch.setattr(run_mod, "_refresh_visualization_bundle", lambda run_context: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "aquinas",
+            "run",
+            "preprocess",
+            "--config",
+            "configs/old_deck_all_sets.yaml",
+            "--name",
+            "old-deck",
+        ],
+    )
+
+    run_mod.run()
+
+    latest = _read_json(tmp_path / "explicit-results" / "latest.json")
+    run_dir = tmp_path / "explicit-results" / latest["run_id"]
+    assert (run_dir / "config.yaml").read_text(encoding="utf-8") == explicit_config.read_text(
+        encoding="utf-8"
+    )
+    metadata = _read_json(run_dir / "metadata.json")
+    assert metadata["name"] == "old-deck"
+
+
 def test_run_preprocess_declined_dataset_fetch_does_not_create_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -556,9 +599,10 @@ def test_run_preprocess_fetches_dataset_before_creating_run(
             (layout.dataset_root / set_name).mkdir(parents=True, exist_ok=True)
         return layout.dataset_root
 
-    def fake_create_run(name=None):
+    def fake_create_run(name=None, config_path=None):
+        assert config_path is not None
         order.append("create_run")
-        return run_management.create_run(name=name)
+        return run_management.create_run(name=name, config_path=config_path)
 
     monkeypatch.setattr(run_mod, "_is_interactive_terminal", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "y")
@@ -638,6 +682,49 @@ def test_run_preprocess_rejects_run_id(
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "`--run-id` cannot be used" in captured.err
+
+
+def test_run_features_rejects_config_for_existing_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aquinas", "run", "features", "--config", "configs/default.yaml"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "`--config` can only be used when creating a new run" in captured.err
+
+
+def test_run_preprocess_rejects_missing_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aquinas", "run", "preprocess", "--config", "configs/missing.yaml"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_mod.run()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Config not found" in captured.err
+    assert not (tmp_path / "results").exists()
 
 
 def test_run_invalid_stage_exits_2(

@@ -1,0 +1,90 @@
+# =============================================================================
+# AQUINAS Toolkit -- NEW Deck All-SET Configuration
+# =============================================================================
+
+data:
+  dataset_root: AQUINAS_DATASET
+  sets:
+    - AQUINAS_SET1_2022_07
+    - AQUINAS_SET2_2023_04
+    - AQUINAS_SET3_2023_08
+    - AQUINAS_SET4_2024_01
+    - AQUINAS_SET5_2024_06
+
+preprocessing:
+  sampling_rate_hz: 100.0
+  sensor_selection:
+    decks: [NEW]
+  strain:
+    locations: [INF, SUP]
+    filter:
+      method: none
+    zeroing:
+      method: linear_endpoints
+    peak_window_half_samples: 100
+  acc:
+    axis: Z
+    min_aligned_samples: 500
+    clipping:
+      method: none
+    filter:
+      method: butterworth_bandpass
+      low_hz: 0.5
+      high_hz: 20.0
+      order: 4
+    zeroing:
+      method: linear_endpoints
+    time_padding:
+      method: max_retained_length
+    frequency_transform:
+      method: fft_magnitude
+      fft_length: max_retained_length
+      low_hz: 0.5
+      high_hz: 20.0
+  event_grouping:
+    method: shared_start
+    key_fields: [deck, Start_Time]
+    group_end_policy: max_end
+  sensor_overrides:
+    exclude:
+      - sensor_name: OLD_S1_UP_SUP_STR
+        sets: [AQUINAS_SET4_2024_01, AQUINAS_SET5_2024_06]
+        reason: damaged sensor per organizer email
+        source: François-Baptiste Cartiaux email dated April 9, 2026
+  alignment:
+    method: r_synchro
+  filtering:
+    min_active_sensors_per_event: 1
+  storage:
+    backend: sqlite
+  exports:
+    aligned_waveforms:
+      enabled: false
+      format: csv.gz
+
+features:
+  sampling_rate_hz: 100.0
+  modal_analysis:
+    enabled: true
+    quantity: ACC
+    axis: Z
+    min_common_events: 2
+    max_events: 5
+    require_full_channel_set: true
+    low_hz: 0.5
+    high_hz: 20.0
+    nperseg: 1024
+    noverlap: 512
+    n_peaks: 3
+
+training:
+  random_seed: 2026
+  split:
+    train: 0.70
+    validation: 0.20
+    test: 0.10
+  standardization:
+    enabled: true
+
+output:
+  results_dir: results

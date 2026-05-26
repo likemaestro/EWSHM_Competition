@@ -273,6 +273,7 @@ aquinas run                        # create a new run and execute the full pipel
 aquinas run --name baseline        # same, with an optional human-readable run name
 aquinas run preprocess             # create a new run and run preprocessing only
 aquinas run preprocess --name prep # same, with an optional human-readable run name
+aquinas run preprocess --config configs/old_deck_all_sets.yaml --name old_deck_all_sets
 aquinas run features               # continue from results/latest.json
 aquinas run train                  # prepare NN split indices and normalization stats
 aquinas run score                  # continue from results/latest.json
@@ -290,7 +291,7 @@ aquinas about                      # toolkit metadata and maintainers
 aquinas --version                  # installed CLI version
 ```
 
-Each new run creates a readable UTC folder, snapshots the active config,
+Each new run creates a readable UTC folder, snapshots the selected config,
 and updates the convenience pointer:
 
 ```text
@@ -309,14 +310,16 @@ results/
 
 Implemented behavior:
 
-- Edit `configs/default.yaml` before creating a new run. v1 does not
-  expose a separate `--config` flag.
+- New runs use `configs/default.yaml` unless `--config PATH` is passed.
+  Use explicit presets such as `configs/old_deck_all_sets.yaml` or
+  `configs/new_deck_all_sets.yaml` to avoid editing the default config.
 - `--name` is optional and only applies when creating a new run.
+- `--config` is optional and only applies when creating a new run.
 - `aquinas run` and `aquinas run preprocess` validate dataset availability
   before creating a fresh run.
 - `aquinas run features|train|score` use `--run-id` when provided,
   otherwise they resolve `results/latest.json`.
-- New runs snapshot `configs/default.yaml` into
+- New runs snapshot the selected config into
   `results/<run_id>/config.yaml`.
 - Downstream stages always use the selected run's `config.yaml`, never
   the current workspace config.

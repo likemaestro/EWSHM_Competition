@@ -330,7 +330,10 @@ def render_top_level_help() -> CLIView:
     commands.add_column("Description")
     commands.add_row("run", "Create a new run and execute the full pipeline.")
     commands.add_row("run <stage>", "Run one pipeline stage: preprocess, features, train, score.")
-    commands.add_row("run preprocess [--name NAME]", "Create a new run and execute preprocessing only.")
+    commands.add_row(
+        "run preprocess [--name NAME] [--config PATH]",
+        "Create a new run and execute preprocessing only.",
+    )
     commands.add_row("run features [--run-id ID]", "Resume an existing run and extract features.")
     commands.add_row("info", "Show dataset summary (sensors, event counts, date ranges).")
     commands.add_row("data <subcommand>", "Download and manage the local dataset copy.")
@@ -349,6 +352,7 @@ def render_top_level_help() -> CLIView:
             ("About", "Use `aquinas --about` to show toolkit metadata."),
             ("Version", "Use `aquinas --version` to show the installed version."),
             ("--name", "Use only when creating a new run."),
+            ("--config", "Use only when creating a new run."),
             ("--run-id", "Resume features, train, or score from an existing run."),
         ]
     )
@@ -358,7 +362,7 @@ def render_top_level_help() -> CLIView:
         "Commands:\n"
         "  run           Create a new run and execute the full pipeline.\n"
         "  run <stage>   Run one pipeline stage: preprocess, features, train, score.\n"
-        "  run preprocess [--name NAME]  Create a new run and execute preprocessing only.\n"
+        "  run preprocess [--name NAME] [--config PATH]  Create a new run and execute preprocessing only.\n"
         "  run features [--run-id ID]    Resume an existing run and extract features.\n"
         "  info          Show dataset summary (sensors, event counts, date ranges).\n"
         "  data <subcommand>  Download and manage the local dataset copy.\n"
@@ -375,6 +379,7 @@ def render_top_level_help() -> CLIView:
         "  About: Use `aquinas --about` to show toolkit metadata.\n"
         "  Version: Use `aquinas --version` to show the installed version.\n"
         "  --name: Use only when creating a new run.\n"
+        "  --config: Use only when creating a new run.\n"
         "  --run-id: Resume features, train, or score from an existing run."
     )
 
@@ -396,7 +401,10 @@ def render_top_level_help() -> CLIView:
 
 def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
     """Build the ``aquinas run`` help renderable."""
-    usage = Text("Usage: aquinas run [stage] [--name NAME] [--run-id ID]", style="key")
+    usage = Text(
+        "Usage: aquinas run [stage] [--name NAME] [--config PATH] [--run-id ID]",
+        style="key",
+    )
     commands = Table(
         box=box.SIMPLE_HEAVY,
         border_style="accent",
@@ -408,7 +416,7 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
     commands.add_column("Description")
     commands.add_row("aquinas run", "Create a new run and execute the full pipeline.")
     commands.add_row(
-        "aquinas run preprocess [--name NAME]",
+        "aquinas run preprocess [--name NAME] [--config PATH]",
         "Create a new run and execute preprocessing only.",
     )
     commands.add_row(
@@ -425,6 +433,7 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
         [
             ("Stages", ", ".join(stages)),
             ("--name", "Optional label stored in metadata when creating a new run."),
+            ("--config", "Config file to snapshot when creating a new run."),
             ("--run-id", "Explicit run to resume for features, train, or score."),
             ("--verbose", "Print detailed timing breakdowns to the console."),
             ("--help", "Show this help message."),
@@ -432,11 +441,12 @@ def render_run_help(stages: tuple[str, ...] | list[str]) -> CLIView:
     )
 
     plain_text = (
-        "Usage: aquinas run [stage] [--name NAME] [--run-id ID]\n\n"
+        "Usage: aquinas run [stage] [--name NAME] [--config PATH] [--run-id ID]\n\n"
         "Stages: "
         f"{', '.join(stages)}\n"
         "Options:\n"
         "  --name    Optional label stored in metadata when creating a new run.\n"
+        "  --config  Config file to snapshot when creating a new run.\n"
         "  --run-id  Explicit run to resume for features, train, or score.\n"
         "  --verbose Print detailed timing breakdowns to the console.\n"
         "  --help    Show this help message."
