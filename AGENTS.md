@@ -66,16 +66,15 @@ not a scored pipeline stage.
   `results/latest.json` is only a convenience pointer to the active run.
 - **Run IDs** use the readable UTC folder format
   `YYYY-MM-DDTHH-MM-SSZ` (for example `2026-03-31T21-45-00Z`).
-- **Config source** -- in v1, new runs always snapshot
-  `configs/default.yaml`; downstream stages must read the selected
-  run's `config.yaml`, never the current workspace config.
-- **CLI contract** -- `aquinas run [stage] [--name NAME] [--run-id ID]
-  [--verbose]`.
-  Use `--name` only when creating a new run. Use `--run-id` only for
-  `features`, `train`, or `score`. Visualization commands live under
-  `aquinas viz ...`.
-- **Config CLI scope** -- v1 does not expose `--config`; users edit
-  `configs/default.yaml` before creating a new run.
+- **Config source** -- new runs snapshot the selected config. If
+  `--config PATH` is omitted, they snapshot `configs/default.yaml`.
+  Downstream stages must read the selected run's `config.yaml`, never
+  the current workspace config.
+- **CLI contract** -- `aquinas run [stage] [--name NAME] [--config PATH]
+  [--run-id ID] [--verbose]`.
+  Use `--name` and `--config` only when creating a new run. Use
+  `--run-id` only for `features`, `train`, or `score`. Visualization
+  commands live under `aquinas viz ...`.
 - **Stage policy** -- stage prerequisites are enforced
   (`preprocess -> features -> train -> score`), and re-running a
   completed stage inside the same run is out of scope for v1.

@@ -65,7 +65,7 @@ We revised the AQUINAS Toolkit preprocessing stage so its primary output is a ne
 
 ## Config Updates
 
-- Added documented preprocessing variables in `configs/default.yaml` and `configs/full_pipeline.yaml`.
+- Added documented preprocessing variables in `configs/default.yaml` and deck-specific all-set configs.
 - Important active settings now include:
   - `preprocessing.sampling_rate_hz`
   - `preprocessing.sensor_selection.decks`

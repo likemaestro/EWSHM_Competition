@@ -22,10 +22,13 @@ from aquinas_toolkit.utils.run_management import (
     RunManagementError,
     create_run,
     ensure_stage_output_dir,
+    get_default_config_path,
+    get_results_dir,
     mark_stage_completed,
     mark_stage_failed,
     mark_stage_started,
     resolve_run,
+    resolve_config_path,
     validate_stage_can_run,
     write_latest_pointer,
 )
@@ -103,6 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Existing run ID to resume for features, train, or score.",
     )
     parser.add_argument(
+        "--config",
+        help="Pipeline config to snapshot when creating a new run.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print detailed timing breakdowns while still writing debug.log for every run.",
@@ -130,6 +137,7 @@ def run() -> None:
             stage=args.stage,
             name=args.name,
             run_id=args.run_id,
+            config_path=args.config,
             verbose=args.verbose,
         )
     except RunManagementError as exc:
@@ -145,6 +153,7 @@ def run_command(
     name: str | None,
     run_id: str | None,
     *,
+    config_path: str | Path | None = None,
     verbose: bool = False,
 ) -> int:
     """Execute the run command and return a process exit code."""
@@ -157,10 +166,17 @@ def run_command(
         )
     if not creates_new_run and name is not None:
         raise RunManagementError("`--name` can only be used when creating a new run.")
+    if not creates_new_run and config_path is not None:
+        raise RunManagementError(
+            "`--config` can only be used when creating a new run. "
+            "Later stages use the selected run's snapshotted config.yaml."
+        )
 
     if creates_new_run:
-        _ensure_workspace_dataset_available_for_new_run()
-        run_context = create_run(name=name)
+        selected_config_path = resolve_config_path(config_path)
+        get_results_dir(selected_config_path)
+        _ensure_dataset_available_for_preprocess(selected_config_path)
+        run_context = create_run(name=name, config_path=selected_config_path)
     else:
         run_context = resolve_run(run_id=run_id)
         if run_id is not None:
@@ -374,4 +390,4 @@ def _is_interactive_terminal() -> bool:
 
 
 def _ensure_workspace_dataset_available_for_new_run() -> None:
-    _ensure_dataset_available_for_preprocess(find_workspace_root() / "configs" / "default.yaml")
+    _ensure_dataset_available_for_preprocess(get_default_config_path())

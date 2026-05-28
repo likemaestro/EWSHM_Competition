@@ -2,13 +2,12 @@
 # AQUINAS Toolkit -- Default Pipeline Configuration
 # =============================================================================
 #
-# This file is the active workspace configuration for the pipeline.
-# New runs snapshot it into results/<run_id>/config.yaml so that later
-# stages resume with exactly the same settings even if this file changes.
+# This file is the default workspace configuration for the pipeline.
+# New runs snapshot it into results/<run_id>/config.yaml unless a different
+# config is passed with `aquinas run ... --config PATH`.
 #
-# If you want to keep config variants, store them alongside this file
-# and copy the desired variant over configs/default.yaml before starting
-# a new run.
+# Named config variants live alongside this file and can be selected directly
+# with `--config`.
 #
 # =============================================================================
 

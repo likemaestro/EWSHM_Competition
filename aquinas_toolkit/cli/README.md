@@ -10,8 +10,8 @@ script in `pyproject.toml`.
 
 | Command | What it does |
 |---|---|
-| `aquinas run [--name NAME]` | Create a new run and execute the full pipeline, then refresh the visualization bundle when dataset inputs are available |
-| `aquinas run preprocess [--name NAME]` | Create a new run and execute only preprocessing, then refresh the visualization bundle when dataset inputs are available |
+| `aquinas run [--name NAME] [--config PATH]` | Create a new run and execute the full pipeline, then refresh the visualization bundle when dataset inputs are available |
+| `aquinas run preprocess [--name NAME] [--config PATH]` | Create a new run and execute only preprocessing, then refresh the visualization bundle when dataset inputs are available |
 | `aquinas run features [--run-id ID]` | Run feature extraction in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
 | `aquinas run train [--run-id ID]` | Prepare deterministic train/validation/test split indices and normalization stats for NN inputs, then refresh the visualization bundle |
 | `aquinas run score [--run-id ID]` | Run health score computation in an existing run, using `latest.json` if `--run-id` is omitted, then refresh the visualization bundle |
@@ -28,7 +28,9 @@ script in `pyproject.toml`.
 
 ## Run storage
 
-- Each new run snapshots `configs/default.yaml` into `results/<run_id>/config.yaml`.
+- Each new run snapshots the selected config into `results/<run_id>/config.yaml`.
+- New runs use `configs/default.yaml` unless `--config PATH` is passed.
+- `--config` is only valid when creating a new run; resumed stages use the run snapshot.
 - `results/latest.json` is only a convenience pointer to the active run.
 - Downstream stages always use the selected run's `config.yaml`, not the current workspace config.
 - When dataset inputs are present locally, `aquinas run ...` refreshes

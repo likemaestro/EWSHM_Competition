@@ -54,12 +54,22 @@ def get_default_config_path() -> Path:
     return find_workspace_root() / DEFAULT_CONFIG_PATH
 
 
+def resolve_config_path(config_path: str | Path | None = None) -> Path:
+    """Resolve a config path against the active workspace root."""
+    if config_path is None:
+        return get_default_config_path()
+    path = Path(config_path)
+    if path.is_absolute():
+        return path
+    return find_workspace_root() / path
+
+
 def get_results_dir(config_path: Path | None = None) -> Path:
-    """Resolve the configured results directory from ``configs/default.yaml``."""
-    resolved_config = config_path or get_default_config_path()
+    """Resolve the configured results directory from a pipeline config."""
+    resolved_config = resolve_config_path(config_path)
     if not resolved_config.exists():
         raise RunManagementError(
-            f"Default config not found at {resolved_config}. Create {DEFAULT_CONFIG_PATH} first."
+            f"Config not found at {resolved_config}. Create it or pass a valid --config path."
         )
 
     try:
@@ -92,10 +102,10 @@ def generate_run_id(results_dir: Path, now: datetime | None = None) -> str:
     return candidate
 
 
-def create_run(name: str | None = None) -> RunContext:
-    """Create a new immutable run directory and snapshot the active config."""
-    results_dir = get_results_dir()
-    default_config_path = get_default_config_path()
+def create_run(name: str | None = None, config_path: str | Path | None = None) -> RunContext:
+    """Create a new immutable run directory and snapshot the selected config."""
+    selected_config_path = resolve_config_path(config_path)
+    results_dir = get_results_dir(selected_config_path)
 
     results_dir.mkdir(parents=True, exist_ok=True)
     run_id = generate_run_id(results_dir)
@@ -103,7 +113,7 @@ def create_run(name: str | None = None) -> RunContext:
     run_dir.mkdir(parents=True, exist_ok=False)
 
     run_config_path = run_dir / RUN_CONFIG_NAME
-    shutil.copy2(default_config_path, run_config_path)
+    shutil.copy2(selected_config_path, run_config_path)
 
     metadata_path = run_dir / METADATA_NAME
     metadata = {
