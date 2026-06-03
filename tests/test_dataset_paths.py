@@ -38,9 +38,23 @@ def test_find_workspace_root_falls_back_to_repo_root(
     assert dataset_paths.find_workspace_root() == dataset_paths.find_repo_root()
 
 
-def test_find_dataset_root_returns_repo_dataset_dir() -> None:
+def test_find_dataset_root_returns_repo_dataset_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_root = tmp_path / "repo"
+    fake_module = fake_root / "aquinas_toolkit" / "utils" / "dataset_paths.py"
+    fake_dataset = fake_root / "AQUINAS_DATASET"
+
+    fake_module.parent.mkdir(parents=True)
+    fake_module.touch()
+    fake_dataset.mkdir()
+
+    monkeypatch.setattr(dataset_paths, "__file__", str(fake_module))
+
     dataset_root = dataset_paths.find_dataset_root()
 
+    assert dataset_root == fake_dataset
     assert dataset_root.name == "AQUINAS_DATASET"
     assert dataset_root.is_dir()
 
