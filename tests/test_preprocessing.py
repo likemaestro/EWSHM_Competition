@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 import sys
 import threading
@@ -771,6 +772,14 @@ def _make_first_neural_event_shared_start_mismatched_end(dataset_root: Path) -> 
     _write_json(table_path, table)
 
 
+def _add_second_neural_set(dataset_root: Path) -> None:
+    set1_dir = dataset_root / "AQUINAS_SET1_2022_07"
+    set2_dir = dataset_root / "AQUINAS_SET2_2023_04"
+    shutil.copytree(set1_dir, set2_dir)
+    for table_path in set2_dir.glob("TABLE_*_SET1.json"):
+        table_path.rename(table_path.with_name(table_path.name.replace("_SET1.json", "_SET2.json")))
+
+
 def _write_sensor(
     set_dir: Path,
     sensor_name: str,
@@ -1449,6 +1458,92 @@ def test_run_preprocess_writes_split_nn_input_tensors_with_configured_sample_cou
     assert included["global_model_channel_index"].astype(int).tolist() == [0, 1, 2, 3]
     assert not included["sensor_name"].str.contains("_SHE_STR").any()
     assert (preprocess_dir / "report" / "neural_input_summary.json").is_file()
+
+
+def test_run_preprocess_deduplicates_nn_channels_across_sets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    dataset_root = _build_neural_preprocessing_dataset(tmp_path)
+    _make_first_neural_event_shared_start_mismatched_end(dataset_root)
+    _add_second_neural_set(dataset_root)
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "configs" / "default.yaml").write_text(
+        "\n".join(
+            [
+                "data:",
+                "  dataset_root: AQUINAS_DATASET",
+                "  sets:",
+                "    - AQUINAS_SET1_2022_07",
+                "    - AQUINAS_SET2_2023_04",
+                "preprocessing:",
+                "  sampling_rate_hz: 100.0",
+                "  sensor_selection:",
+                "    decks: [OLD]",
+                "  strain:",
+                "    locations: [INF, SUP]",
+                "    peak_window_half_samples: 2",
+                "  acc:",
+                "    min_aligned_samples: 4",
+                "  event_grouping:",
+                "    key_fields: [deck, Start_Time, End_Time]",
+                "  signal_filter:",
+                "    method: butterworth_bandpass",
+                "    low_hz: 0.5",
+                "    high_hz: 20.0",
+                "    order: 4",
+                "  alignment:",
+                "    method: r_synchro",
+                "  zeroing:",
+                "    method: linear_endpoints",
+                "  filtering:",
+                "    min_active_sensors_per_event: 1",
+                "  storage:",
+                "    backend: sqlite",
+                "  exports:",
+                "    aligned_waveforms:",
+                "      enabled: false",
+                "      format: csv.gz",
+                "output:",
+                "  results_dir: results",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["aquinas", "run", "preprocess"])
+    run_mod.run()
+
+    latest = json.loads((tmp_path / "results" / "latest.json").read_text(encoding="utf-8"))
+    preprocess_dir = tmp_path / "results" / latest["run_id"] / "stages" / "preprocess"
+    nn_inputs_dir = preprocess_dir / "nn_inputs"
+    metadata_dir = nn_inputs_dir / "metadata"
+    strain_inputs = np.load(nn_inputs_dir / "strain_inputs.npy")
+    acc_inputs = np.load(nn_inputs_dir / "acc_inputs.npy")
+    sensor_ids = json.loads((metadata_dir / "sensor_ids.json").read_text(encoding="utf-8"))
+    manifest = pd.read_csv(metadata_dir / "manifest.csv")
+    sensor_map = pd.read_csv(metadata_dir / "sensor_map.csv")
+    neural_summary = json.loads((metadata_dir / "neural_input_summary.json").read_text(encoding="utf-8"))
+
+    assert strain_inputs.shape == (2, 4, 2)
+    assert acc_inputs.shape == (2, 3, 2)
+    assert sensor_ids["strain"] == ["OLD_S1_DO_INF_STR", "OLD_S1_DO_SUP_STR"]
+    assert sensor_ids["acc_z"] == ["OLD_S1_DO_INT_ACC_Z", "OLD_S1_DO_MID_ACC_Z"]
+    assert len(sensor_ids["strain"]) == len(set(sensor_ids["strain"]))
+    assert len(sensor_ids["acc_z"]) == len(set(sensor_ids["acc_z"]))
+    assert manifest["set_name"].tolist() == [
+        "AQUINAS_SET1_2022_07",
+        "AQUINAS_SET2_2023_04",
+    ]
+    assert neural_summary["strain_channel_count"] == 2
+    assert neural_summary["acc_channel_count"] == 2
+
+    included = sensor_map.loc[sensor_map["include_flag"].astype(bool)]
+    assert included["sensor_name"].is_unique
+    included = included.sort_values("global_model_channel_index", kind="mergesort")
+    assert included["model_channel_id"].tolist() == ["STR00", "STR01", "ACCZ00", "ACCZ01"]
 
 
 def test_run_preprocess_exact_window_preserves_split_nn_coverage(

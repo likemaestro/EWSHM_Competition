@@ -277,6 +277,7 @@ def _build_sensor_map(
     if decks:
         selected = selected.loc[selected["deck"].isin(decks)].copy()
     selected = selected.sort_values(["sensor_order", "sensor_name"], kind="mergesort")
+    selected = selected.drop_duplicates(subset=["sensor_name"], keep="first")
 
     selected_rows = list(selected.itertuples(index=False))
     strain_sensors = [
