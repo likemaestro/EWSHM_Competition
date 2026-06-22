@@ -36,18 +36,18 @@ class SequenceAttentionAE(nn.Module):
         # encoder
         self.encoder = nn.Sequential(
             nn.Linear(flattened, latent_dim*16),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(latent_dim*16, latent_dim*4),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(latent_dim*4, latent_dim)
         )
 
         # decoder
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, latent_dim*4),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(latent_dim*4, latent_dim*16),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(
                 latent_dim*16,
                 flattened
@@ -168,7 +168,7 @@ class DualBranchFusionAE(nn.Module):
                 acc_latent * 8
             ),
 
-            nn.ReLU(),
+            nn.GELU(),
 
             nn.Linear(
                 acc_latent * 8,
@@ -183,7 +183,7 @@ class DualBranchFusionAE(nn.Module):
                 strain_latent * 8
             ),
 
-            nn.ReLU(),
+            nn.GELU(),
 
             nn.Linear(
                 strain_latent * 8,
@@ -207,7 +207,7 @@ class DualBranchFusionAE(nn.Module):
                 fused_latent
             ),
 
-            nn.ReLU()
+            nn.GELU()
         )
 
         # split back
@@ -219,7 +219,7 @@ class DualBranchFusionAE(nn.Module):
                 fusion_in
             ),
 
-            nn.ReLU()
+            nn.GELU()
         )
 
         # -------------------
@@ -233,7 +233,7 @@ class DualBranchFusionAE(nn.Module):
                 acc_latent * 8
             ),
 
-            nn.ReLU(),
+            nn.GELU(),
 
             nn.Linear(
                 acc_latent * 8,
@@ -248,7 +248,7 @@ class DualBranchFusionAE(nn.Module):
                 strain_latent * 8
             ),
 
-            nn.ReLU(),
+            nn.GELU(),
 
             nn.Linear(
                 strain_latent * 8,
