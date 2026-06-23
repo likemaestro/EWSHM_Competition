@@ -9,7 +9,6 @@ class SequenceAttentionAE(nn.Module):
         acc_seq=695,
         strain_seq=200,
         channels=40,
-
         heads=4,
         latent_dim=128
     ):
