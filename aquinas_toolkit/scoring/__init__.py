@@ -1,5 +1,5 @@
 """Structural health score synthesis.
 
-Status: stub — not yet implemented.
-See aquinas_toolkit/scoring/README.md for planned work.
+The current project scoring narrative is documented through notebooks 04/05
+and the notebook-backed cross-SET reconstruction-error scripts.
 """

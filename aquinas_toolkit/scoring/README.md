@@ -8,9 +8,11 @@ the challenge rules.
 
 ## Status
 
-Stub — not yet implemented.
+Implemented as a notebook-backed scoring narrative. The current final
+interpretation is documented in `notebooks/05_health_scoring.ipynb` and the
+cross-SET evaluation scripts under `notebooks/azrmirz_fncs/`.
 
-Planned work:
+Current work:
 
 - Per-sensor score aggregation (summarise each sensor's anomaly
   history into a time series)
@@ -23,6 +25,6 @@ Planned work:
 ## Interface
 
 - **Input:** per-event anomaly scores and trend indicators from the
-  training stage
+  neural reconstruction-error experiments
 - **Output:** a time series of structural health scores with
   uncertainty estimates, covering all five monthly datasets

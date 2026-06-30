@@ -6,8 +6,11 @@ Jupyter notebooks for exploration, visualisation, and presentation.
 
 - Top-level numbered notebooks (`01_`, `02_`, ...) are the main project
   storyline from raw data inspection through scoring.
-- `misc/` holds supporting or one-off analyses that do not belong in the
-  main numbered sequence.
+- `misc/` holds supporting analyses, diagnostics, and experiment notebooks
+  that feed the main numbered sequence.
+- `azrmirz_fncs/` holds the notebook-backed neural-network preparation,
+  training, evaluation, cross-SET inference, and outlier-inspection scripts
+  used by notebooks 04 and 05.
 
 ## Naming convention
 
@@ -19,8 +22,8 @@ raw data exploration through to the final health score:
 | `01_sensor_overview` | Dataset structure, raw waveform plots | Done |
 | `02_preprocessing` | Filtering, zeroing, alignment | Done |
 | `03_feature_extraction` | FDD, peak picking, and mode shapes | Done |
-| `04_anomaly_detection` | Unsupervised outlier and trend detection | TODO |
-| `05_health_scoring` | Final structural health score computation | TODO |
+| `04_anomaly_detection` | Unsupervised reconstruction-error anomaly detection | Done |
+| `05_health_scoring` | Notebook-backed structural health score narrative | Done |
 
 Supporting notebooks in `misc/` use alphabetical prefixes so they are clearly
 distinguished from the numbered main storyline. Continue the series as
@@ -29,6 +32,24 @@ distinguished from the numbered main storyline. Continue the series as
 | Notebook | Purpose |
 | --- | --- |
 | `misc/A_temperature_correlations` | Exploratory temperature-correlation analysis |
+| `misc/B_preprocessed_temperature_correlations` | Temperature checks after preprocessing |
+| `misc/C_strain_processing` | Strain-channel processing experiments |
+| `misc/D_statistical_trend_analysis` | Statistical trend analysis across sets |
+| `misc/E_preprocessing_neural_inputs` | NN input tensor inspection |
+| `misc/F_checking_preprocessed_26052026` | Preprocessed output diagnostics |
+| `misc/G_testing_attention_model` | Attention-model experimentation |
+| `misc/G_testing_attention_model_OLD` | Archived attention-model experiment kept for traceability |
+| `misc/H_testing_models` | Toolkit model-helper experiments |
+| `misc/I_delete_afterwards` | Scratch notebook retained outside the main storyline |
+
+Notebook-backed neural-network scripts live in `azrmirz_fncs/`:
+
+- `architecture_1_v3.py`
+- `prepare_per_channel_samples_new_deck.py`
+- `train_architecture_1_v3.py`
+- `evaluate_architecture_1_v3.py`
+- `inference_cross_set_v3.py`
+- `inspect_outlier_event.py`
 
 ## How to run
 
@@ -113,3 +134,28 @@ notebook takes the conditioned waveforms and derives modal features.
 - Reusable logic (FDD computation, peak picking, mode-shape annotation) lives
   in `aquinas_toolkit/feature_extraction/`; the notebook is thin wrappers
   and display only.
+
+## 04_anomaly_detection Notes
+
+`04_anomaly_detection.ipynb` is the presentation index for the unsupervised
+neural reconstruction-error workflow. It points to the attention-autoencoder
+experiments in `misc/G_testing_attention_model.ipynb`,
+`misc/H_testing_models.ipynb`, `aquinas_toolkit/models/`, and the v3 training
+script in `azrmirz_fncs/`.
+
+The notebook does not duplicate the model-training code. It explains the
+current method: train an unsupervised reconstruction model on baseline
+behavior, compute reconstruction errors, and use those errors as anomaly
+evidence.
+
+## 05_health_scoring Notes
+
+`05_health_scoring.ipynb` is the presentation index for the current synthetic
+health-score interpretation. It points to the SET1-trained baseline,
+fixed-normalization cross-SET inference, percentile thresholding, and
+per-event reconstruction-error summaries produced by the v3 evaluation and
+inference scripts in `azrmirz_fncs/`.
+
+The notebook is the final story layer: it ties reconstruction-error
+distributions, threshold exceedance, temperature context, and monthly
+cross-SET comparisons into the structural health-score narrative.

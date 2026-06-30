@@ -16,8 +16,8 @@ The viewer is intended to answer three practical questions:
 ## Status
 
 **Work in progress (WIP).** A WIP badge is shown in the viewer topbar
-as a reminder that proxy metrics are in use and the health-scoring
-pipeline stages are not yet connected.
+as a reminder that proxy metrics are in use and viewer integration with
+the notebook-backed health-score narrative remains separate.
 
 Current capabilities:
 
@@ -35,10 +35,9 @@ Current capabilities:
 - Refresh the bundle automatically from `aquinas run ...` when the run
   config points to a locally available AQUINAS dataset tree
 
-Current limitation:
+Current WIP boundary:
 
-- Until the pipeline scoring stages are implemented, the viewer uses
-  proxy metrics derived from AQUINAS index-table fields such as
+- The viewer uses proxy metrics derived from AQUINAS index-table fields such as
   `Range`, `Mean_Value`, `Duration`, `Temperature`, and event count.
 - Spatial semantics come from the AQUINAS dataset README and handbook,
   but the shear-section placement is still an analytical approximation:

@@ -196,7 +196,7 @@ def test_main_shows_version_for_version_flag(
     main()
 
     captured = capsys.readouterr()
-    assert "aquinas 0.1.0" in captured.out
+    assert "aquinas 0.2.0" in captured.out
     assert captured.err == ""
 
 

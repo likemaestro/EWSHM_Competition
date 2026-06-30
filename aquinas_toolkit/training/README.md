@@ -7,8 +7,10 @@ The challenge remains unsupervised: no labels are introduced here.
 
 ## Status
 
-Partially implemented. `aquinas run train` currently performs deterministic
-data preparation only; full NN architecture training is still a later step.
+Implemented for the reusable toolkit stage. `aquinas run train` performs
+deterministic data preparation for the neural-network experiments, while the
+model-fitting experiments are documented in notebooks 04/05 and the
+notebook-backed scripts under `notebooks/azrmirz_fncs/`.
 
 ## Current Interface
 
@@ -29,9 +31,9 @@ The stage writes:
 The split indices are applied to every input array so row `i` stays the same
 event across strain, ACC, temperature, and event-id artifacts.
 
-## Deferred Model Work
+## Notebook-Backed Model Work
 
-The later model-training implementation can consume the prepared artifacts for:
+The notebook-backed model scripts consume the prepared artifacts for:
 
 - attention-based architectures
 - latent-space plus temperature-informed architectures

@@ -105,7 +105,7 @@ Key symbols:
   vehicle passage together before alignment when their end times differ
   slightly.
 - `deck="OLD"` or `deck="NEW"` is an exact filter on the derived deck
-  token. It is not partial matching on the full sensor name.
+  token. It is not substring matching on the full sensor name.
 - `timestamp=` in `find_events()` is a strict containment query:
   an event is returned only when `Start_Time < timestamp < End_Time`.
   It is not a nearest-event lookup or an inclusive boundary check.
@@ -191,7 +191,7 @@ steps, in this order:
 | Organizer email, April 9, 2026 | One sensor was damaged between SET3 and SET4 and should be discarded for SET4 and SET5 only | Add a config-driven exclusion policy rather than hardcoding it in the algorithm | `preprocessing.sensor_overrides.exclude` | Implemented now |
 | Local dataset validation, April 9, 2026 guidance | `OLD_S1_UP_SUP_STR` matches the warning: TABLE `Range` becomes `0.0` throughout SET4 and SET5 while raw slices still vary and the baseline shifts sharply | Keep the exclusion config-driven and expose it through manifest and summary artifacts | `sensor_records.csv`, `event_manifest.csv`, `summary.json` | Implemented now |
 | Meeting Q&A, April 9, 2026 | Temperature is not hardware-compensated | Preserve temperature metadata but defer active compensation | `sensor_records.csv` | Deferred but acknowledged |
-| Follow-up Q&A, source date pending | Expected frequencies are around 2–10 Hz | Use 0.5–20 Hz band-pass as the default passband in both the preprocessing pipeline and the FDD analysis notebook | `signal_filter.low_hz`, `signal_filter.high_hz` | Implemented now |
+| Follow-up Q&A, source date to verify | Expected frequencies are around 2–10 Hz | Use 0.5–20 Hz band-pass as the default passband in both the preprocessing pipeline and the FDD analysis notebook | `signal_filter.low_hz`, `signal_filter.high_hz` | Implemented now |
 
 ## Performance
 
@@ -202,7 +202,7 @@ the same file would be read and re-parsed once per event that references it.
 
 `AquinasReader.load_raw_file()` caches each parsed file for the lifetime of
 the reader instance (one per SET). This reduces JSON reads from O(records) to
-O(raw files per sensor), which is 29 to 226 times fewer reads depending on
+O(raw files per sensor), which is 29 to 226 times fewer reads based on
 the set.
 
 See `aquinas_toolkit/io/README.md` for the measured numbers and caching rules.

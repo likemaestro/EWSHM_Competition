@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aquinas-toolkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Toolkit for the EWSHM 2026 AQUINAS structural health monitoring competition"
 authors = [
     { name = "Amir Zare Beiranvand", email = "a.zarebeiranvand@phd.poliba.it" },

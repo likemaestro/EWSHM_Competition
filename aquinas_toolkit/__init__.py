@@ -7,7 +7,7 @@ EWSHM 2026 structural health monitoring competition.
 The toolkit follows a pipeline architecture:
 
     reader  -->  preprocessing  -->  feature_extraction  -->  training  -->  scoring
-    (done)       (done)              (partial)               (stub)          (stub)
+    (done)       (done)              (done v1)              (done)          (done)
 
 Quick start::
 
@@ -23,7 +23,7 @@ from importlib import import_module
 from typing import Any
 
 __all__ = ["AquinasReader", "plot_waveform", "plot_sensor_grid", "plot_sensor_overlay"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def __getattr__(name: str) -> Any:

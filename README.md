@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="aquinas_toolkit/visualization/viewer_assets/logo.png" alt="Aquinas Toolkit" width="100%"/>
+  <img src="aquinas_toolkit/visualization/viewer_assets/logo.png" alt="AQUINAS Toolkit" width="100%"/>
 </p>
 
 <h1 align="center">AQUINAS Toolkit — EWSHM 2026 Challenge</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python ≥3.11">
-  <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/version-0.2.0-orange" alt="Version 0.2.0">
   <img src="https://img.shields.io/badge/license-private-lightgrey" alt="License">
 </p>
 
@@ -38,14 +38,20 @@
 ## At a glance
 
 - Research competition entry for an unsupervised, data-driven structural health score built from raw bridge measurements under the EWSHM Challenge 1 constraints
-- Python toolkit with implemented data access, preprocessing, feature-store generation, CLI workflows, and offline visualization for repeatable offline analysis
-- Current emphasis is robust preprocessing, NN-ready event tensors, feature extraction, and deterministic training-data preparation; global scoring remains intentionally stubbed while the run layout under `results/` is already reproducible
+- Python toolkit with implemented data access, preprocessing, feature-store generation, CLI workflows, neural-model helpers, and notebook-backed scoring analysis for repeatable offline analysis
+- Current emphasis is robust preprocessing, NN-ready event tensors, feature extraction, deterministic training-data preparation, reconstruction-error anomaly detection, and a synthetic health-score narrative across the AQUINAS sets
 
 ## Release
 
-Current milestone release: [`v0.1.0`](https://github.com/likemaestro/EWSHM_Competition/releases/tag/v0.1.0)
+Current milestone release: [`v0.2.0`](https://github.com/likemaestro/EWSHM_Competition/releases/tag/v0.2.0)
 
-This release covers the implemented reader, preprocessing, feature extraction, CLI workflow, offline visualization bundle, and training-data split preparation. Full neural-network model training and `scoring/` remain pending, so the repository is still an early milestone rather than a complete end-to-end competition pipeline.
+This release covers the implemented reader, dataset bootstrap/verification,
+preprocessing, feature extraction, CLI run workflow, offline visualization
+bundle, NN input packaging, and deterministic training-data preparation.
+Neural-network model fitting, reconstruction-error anomaly detection, and
+health-score synthesis are implemented through notebook-backed experiments
+and helper scripts, with notebooks 04 and 05 serving as the presentation
+entry points for the final interpretation.
 
 ## The challenge
 
@@ -88,13 +94,14 @@ EWSHM_Competition/
 │
 ├── aquinas_toolkit/          Core Python package
 │   ├── io/                   Data I/O (AquinasReader)              [implemented]
-│   ├── cli/                  CLI commands (aquinas run/info/viz)   [implemented]
+│   ├── cli/                  CLI commands (run/data/preprocess/viz) [implemented]
 │   ├── preprocessing/        Signal preprocessing                  [implemented]
 │   ├── feature_extraction/   Feature extraction                    [implemented]
-│   ├── training/             Split preparation for NN inputs       [partial]
+│   ├── training/             Split preparation for NN inputs       [implemented]
+│   ├── models/               Neural model helpers                  [implemented]
 │   ├── utils/                Shared utilities (plotting)           [implemented]
-│   ├── scoring/              Health score synthesis                [stub]
-│   └── visualization/        Offline 3D bridge viewer              [implemented]
+│   ├── scoring/              Health score synthesis narrative      [implemented]
+│   └── visualization/        Offline 3D bridge viewer              [partial / WIP]
 │
 ├── AGENTS.md                 Instructions for coding agents
 ├── pyproject.toml            Package metadata and CLI entry point
@@ -107,10 +114,19 @@ EWSHM_Competition/
 │   ├── 03_feature_extraction.ipynb
 │   ├── 04_anomaly_detection.ipynb
 │   ├── 05_health_scoring.ipynb
+│   ├── azrmirz_fncs/         Notebook-backed NN training/evaluation scripts
 │   └── misc/
-│       └── A_temperature_correlations.ipynb
+│       ├── A_temperature_correlations.ipynb
+│       ├── B_preprocessed_temperature_correlations.ipynb
+│       ├── C_strain_processing.ipynb
+│       ├── D_statistical_trend_analysis.ipynb
+│       ├── E_preprocessing_neural_inputs.ipynb
+│       ├── F_checking_preprocessed_26052026.ipynb
+│       ├── G_testing_attention_model.ipynb
+│       └── H_testing_models.ipynb
 │
 ├── docs/                     Challenge rules & dataset handbook (PDFs)
+├── scripts/                  Supporting development/diagnostic scripts
 ├── results/                  Output figures and data (git-ignored)
 └── AQUINAS_DATASET/          Raw data (git-ignored, user-supplied)
 ```
@@ -120,12 +136,13 @@ EWSHM_Competition/
 |---|---|---|
 | `aquinas_toolkit.io` | Implemented | `AquinasReader` loads index tables and raw waveforms |
 | `aquinas_toolkit.utils` | Implemented | Plotting helpers available through the public API |
-| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, preprocess/features/train dispatch, preprocess quicklook, and score pending |
-| `aquinas_toolkit.visualization` | Implemented | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
-| `aquinas_toolkit.preprocessing` | Implemented | Signal-specific filtering -> zeroing -> alignment pipeline with manifests, SQLite artifacts, split NN input tensors, quicklook inspection, and sensor override audit outputs |
-| `aquinas_toolkit.feature_extraction` | Implemented | FDD modal analysis plus per-sensor waveform statistics and SQLite feature storage |
-| `aquinas_toolkit.training` | Partial | Deterministic train/validation/test split indices and train-only normalization stats for split NN inputs |
-| `aquinas_toolkit.scoring` | Stub | Global health score aggregation |
+| `aquinas_toolkit.cli` | Implemented | Run lifecycle, metadata, resume, data fetch/status/verify/path, preprocess/features/train/score dispatch, preprocess quicklook, and visualization commands |
+| `aquinas_toolkit.visualization` | Partial / WIP | Offline bridge viewer with proxy metrics, trends, correlations, and waveform previews |
+| `aquinas_toolkit.preprocessing` | Implemented | Signal-specific filtering -> zeroing -> alignment pipeline with canonical SQLite storage, summary/report artifacts, optional aligned CSV exports, NN input tensors, quicklook inspection, and sensor override audit outputs |
+| `aquinas_toolkit.feature_extraction` | Implemented v1 | Per-sensor waveform/context features, configured-axis acceleration FDD, mode-shape summaries, feature-family status rows, and SQLite feature storage |
+| `aquinas_toolkit.training` | Implemented | Deterministic train/validation/test split indices and train-only normalization stats for NN input tensors |
+| `aquinas_toolkit.models` | Implemented | Attention autoencoder helpers and training functions used by notebook-backed experiments |
+| `aquinas_toolkit.scoring` | Implemented | Synthetic health-score narrative demonstrated in notebooks 04/05 and notebook-side helper scripts |
 
 ## Organizer-Driven Preprocessing Notes
 
@@ -151,18 +168,19 @@ follow-up email from Francois-Baptiste Cartiaux:
 Pipeline order: **signal-specific filtering -> zeroing -> alignment**
 
 - groups events by deck and shared `Start_Time` by default, with event end
-  recorded as the maximum grouped `End_Time` before alignment
+  recorded as the maximum grouped `End_Time` before alignment; exact
+  `Start_Time` / `End_Time` grouping is still available by config
 - queries organizer-style timestamp windows with strict containment
 - leaves strain unfiltered and applies a zero-phase Butterworth band-pass
   filter (default 0.5-20 Hz) to ACC_Z before any baseline or timing correction
 - applies per-sensor linear-endpoint zeroing (baseline removal) after filtering
 - aligns sensors with the organizer `Synchro()` workflow:
   first selected sensor as reference, two shrinking passes, no interpolation
-- writes event manifests, sensor-record status tables, a canonical
-  SQLite preprocess store, per-event waveform artifacts, neural-input
-  arrays under `nn_inputs/`, neural-input metadata under
-  `nn_inputs/metadata/`, packaging reports, an audit report for the
-  damaged-sensor override, and a local Python-vs-R parity harness
+- writes a canonical SQLite preprocess store, `summary.json`, event and
+  sensor status tables, optional aligned waveform CSV exports,
+  neural-input arrays under `nn_inputs/`, neural-input metadata under
+  `nn_inputs/metadata/`, packaging reports, and an audit trail for the
+  damaged-sensor override
 
 Team-facing details and rationale live in:
 
@@ -264,19 +282,21 @@ Notebook layout:
 - Top-level numbered notebooks (`01_` to `05_`) are the main project storyline.
 - `notebooks/misc/` contains supporting analyses with alphabetical prefixes
   to distinguish them from the numbered main storyline.
-- Current supporting notebook: `misc/A_temperature_correlations.ipynb`.
+- `notebooks/azrmirz_fncs/` contains notebook-backed neural-network
+  preparation, training, evaluation, cross-SET inference, and outlier
+  inspection scripts used by notebooks 04 and 05.
 
 ### 4. Run the pipeline
 
 ```bash
-aquinas run                        # create a new run and execute the full pipeline
+aquinas run                        # create a new reproducible pipeline run
 aquinas run --name baseline        # same, with an optional human-readable run name
 aquinas run preprocess             # create a new run and run preprocessing only
 aquinas run preprocess --name prep # same, with an optional human-readable run name
 aquinas run preprocess --config configs/old_deck_all_sets.yaml --name old_deck_all_sets
 aquinas run features               # continue from results/latest.json
 aquinas run train                  # prepare NN split indices and normalization stats
-aquinas run score                  # continue from results/latest.json
+aquinas run score                  # score-stage entry point; see notebooks 04/05 for the scoring narrative
 aquinas run features --run-id 2026-03-31T21-45-00Z  # resume an older run explicitly
 aquinas preprocess quicklook --event-index 42       # inspect one preprocessed NN event row
 aquinas viz build                  # explicitly rebuild the viewer for the active run
@@ -342,12 +362,15 @@ Implemented behavior:
 The metadata file records the run name, creation time, git state, and
 per-stage status (`not_started`, `running`, `completed`, `failed`).
 
-Current limitation:
+Current model and scoring workflow:
 
-- The `features` stage is fully wired and will execute FDD modal analysis and
-  time-domain feature extraction. The `train` and `score` stages enforce stage
-  order and update metadata but the corresponding algorithms are not yet wired
-  into the CLI.
+- The CLI remains the reproducible run entry point for data access,
+  preprocessing, feature extraction, and NN input preparation.
+- Notebook 04 documents the unsupervised neural reconstruction-error
+  workflow used for anomaly detection.
+- Notebook 05 documents the SET1-trained baseline, fixed normalization/model,
+  cross-SET inference, percentile thresholding, and synthetic health-score
+  interpretation.
 
 ### 5. Rebuild or open the viewer
 
@@ -407,11 +430,11 @@ What the viewer currently shows:
 - Homologous sensor comparisons and capped correlation overlays
 - Deck-scoped event previews keyed by the configured event grouping policy
 
-Current limitation / WIP:
+Visualization WIP:
 
-- Until the scoring stages are implemented, the viewer uses metadata-derived
-  proxy metrics rather than final structural health scores. A **WIP** badge
-  is shown in the viewer topbar as a reminder.
+- The viewer uses metadata-derived proxy metrics rather than the
+  notebook-derived final health-score narrative. A **WIP** badge is shown in
+  the viewer topbar as a reminder.
 - `aquinas viz open` serves the bundle over local HTTP and keeps the
   process running until you stop it with `Ctrl+C`. This avoids browser
   `file://` CORS restrictions when loading JSON artifacts.

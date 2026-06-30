@@ -48,7 +48,7 @@ script in `pyproject.toml`.
 - In non-interactive terminals, missing or incomplete dataset inputs fail
   before new-run creation and point users to `aquinas data fetch` or
   `aquinas data fetch --force`.
-- A placeholder dataset root containing only stub files such as
+- A bootstrap-only dataset root containing only marker files such as
   `README.md` or `.gitkeep` is treated as an empty bootstrap destination,
   not as a destructive overwrite/repair case.
 
