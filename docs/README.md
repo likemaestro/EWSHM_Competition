@@ -6,9 +6,18 @@ Reference documents for the EWSHM 2026 competition.
 
 | Document | What it covers |
 |---|---|
-| [Challenge Rules](20260127_rules_challenge_1_OSMOS.pdf) | Competition objectives, evaluation criteria, timeline, and contact information from OSMOS Group |
-| [AQUINAS Dataset Handbook](Aquinas-Dataset-Handbook.pdf) | Full technical specification of the dataset: bridge description, sensor layout, file formats, naming conventions, and units |
-| [SET1 OLD Preprocessing and Neural Input Workflow](set1_old_preprocessing_neural_input_workflow.md) | Step-by-step summary of the current SET1/OLD preprocessing flow, sensor-specific conditioning, `r_synchro` alignment, and why only complete 20-sensor events feed the neural network |
+| [Challenge Rules](sources/20260127_rules_challenge_1_OSMOS.pdf) | Competition objectives, evaluation criteria, timeline, and contact information from OSMOS Group |
+| [AQUINAS Dataset Handbook](sources/Aquinas-Dataset-Handbook.pdf) | Full technical specification of the dataset: bridge description, sensor layout, file formats, naming conventions, and units |
+
+## Working notes (`notes/`)
+
+Detailed preprocessing and neural-input workflow notes, kept for traceability:
+
+| Note | What it covers |
+|---|---|
+| [SET1 OLD Preprocessing and Neural Input Workflow](notes/set1_old_preprocessing_neural_input_workflow.md) | Step-by-step summary of the SET1/OLD preprocessing flow, sensor-specific conditioning, `r_synchro` alignment, and 20-sensor event filtering |
+| [Preprocessing Neural Inputs Summary](notes/preprocessing_neural_inputs_summary.md) | Summary of the final neural-input preprocessing pipeline |
+| [Preprocessing QC Neural Inputs Summary](notes/preprocessing_qc_neural_inputs_summary.md) | Quality-control checks applied to the neural-input tensors |
 
 ## Dataset reference
 
@@ -16,10 +25,10 @@ The dataset itself ships with its own detailed README at
 `AQUINAS_DATASET/README.md` -- see that file for sensor codes,
 JSON schema, and channel layout.
 
-## Deliverables (future)
+## Deliverables
 
-The two-page methodology + results summary (due July 1, 2026)
-will be added to this folder when written.
+The two-page methodology + results summary was submitted July 2026 as part of
+the EWSHM 2026 Challenge 1 entry.
 
 ## Organizer Guidance Log
 

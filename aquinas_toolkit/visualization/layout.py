@@ -41,26 +41,30 @@ def _norm(meters: float) -> float:
 #   handbook only states that the shear sensors are located "near pier 1".
 # - The shared cross-section below is a refined analytical box-girder
 #   derived from the handbook-scale interpretation used by the viewer:
-#   45 m span, 2.0 m depth, 7.5 m top slab width, 4.7 m bottom slab
-#   width, 0.30 m slab thickness, and 0.35 m web thickness.
+#   45 m span, 2.0 m depth, and a *trapezoidal* box that is wider at the
+#   top (where the webs meet the top slab) and narrower at the bottom
+#   slab, matching the structural drawings. Field names below are stated
+#   explicitly as "top" / "bottom" of the box so the viewer render and the
+#   sensor anchors stay in agreement.
 GIRDER_DEPTH = _norm(2.0)
 TOP_SLAB_WIDTH = _norm(7.5)
-BOTTOM_SLAB_WIDTH = _norm(4.7)
+WEB_OUTER_TOP_WIDTH = _norm(5.0)      # box outer width where webs meet the top slab
+WEB_OUTER_BOTTOM_WIDTH = _norm(3.2)   # box outer width at the bottom slab (narrower)
+BOTTOM_SLAB_WIDTH = WEB_OUTER_BOTTOM_WIDTH
 SLAB_THICKNESS = _norm(0.30)
 WEB_THICKNESS = _norm(0.35)
-WEB_TOP_OUTER_WIDTH = _norm(4.0)
-INNER_BOTTOM_WIDTH = _norm(4.0)
-TOP_INNER_WIDTH = WEB_TOP_OUTER_WIDTH - (2 * WEB_THICKNESS)
-OVERHANG_WIDTH = (TOP_SLAB_WIDTH - WEB_TOP_OUTER_WIDTH) / 2
+WEB_INNER_TOP_WIDTH = WEB_OUTER_TOP_WIDTH - (2 * WEB_THICKNESS)
+WEB_INNER_BOTTOM_WIDTH = WEB_OUTER_BOTTOM_WIDTH - (2 * WEB_THICKNESS)
+OVERHANG_WIDTH = (TOP_SLAB_WIDTH - WEB_OUTER_TOP_WIDTH) / 2
 SENSOR_READABILITY_OFFSET = _norm(0.12)
 
 HALF_DEPTH = GIRDER_DEPTH / 2
 HALF_TOP_SLAB = TOP_SLAB_WIDTH / 2
 HALF_BOTTOM_SLAB = BOTTOM_SLAB_WIDTH / 2
-HALF_WEB_TOP_OUTER = WEB_TOP_OUTER_WIDTH / 2
-HALF_WEB_TOP_INNER = TOP_INNER_WIDTH / 2
-HALF_WEB_BOTTOM_OUTER = HALF_BOTTOM_SLAB
-HALF_WEB_BOTTOM_INNER = INNER_BOTTOM_WIDTH / 2
+HALF_WEB_OUTER_TOP = WEB_OUTER_TOP_WIDTH / 2
+HALF_WEB_OUTER_BOTTOM = WEB_OUTER_BOTTOM_WIDTH / 2
+HALF_WEB_INNER_TOP = WEB_INNER_TOP_WIDTH / 2
+HALF_WEB_INNER_BOTTOM = WEB_INNER_BOTTOM_WIDTH / 2
 TOP_SLAB_UNDERSIDE_Y = HALF_DEPTH - SLAB_THICKNESS
 BOTTOM_SLAB_TOP_Y = -HALF_DEPTH + SLAB_THICKNESS
 
@@ -130,17 +134,17 @@ def _side_sign(side: str) -> int:
 def _web_outer_half_width_at(y: float) -> float:
     """Return the half-width of the outer web face at a given local Y.
 
-    After the geometry fix the web is wider at the top (HALF_BOTTOM_SLAB)
-    and narrower at the bottom (HALF_WEB_TOP_OUTER), matching the correct
-    box-girder profile shown in the structural drawings.
+    The web is wider at the top (HALF_WEB_OUTER_TOP) and narrower at the
+    bottom (HALF_WEB_OUTER_BOTTOM), matching the trapezoidal box-girder
+    profile shown in the structural drawings.
     """
     top_y = TOP_SLAB_UNDERSIDE_Y
     bottom_y = BOTTOM_SLAB_TOP_Y
     span = bottom_y - top_y
     if span == 0:
-        return HALF_BOTTOM_SLAB
+        return HALF_WEB_OUTER_BOTTOM
     t = (y - top_y) / span
-    return HALF_BOTTOM_SLAB + ((HALF_WEB_TOP_OUTER - HALF_BOTTOM_SLAB) * t)
+    return HALF_WEB_OUTER_TOP + ((HALF_WEB_OUTER_BOTTOM - HALF_WEB_OUTER_TOP) * t)
 
 
 def parse_sensor_name(sensor_name: str) -> dict[str, Any]:
@@ -209,7 +213,7 @@ def _sensor_mount(parsed: dict[str, Any], *, x: float) -> dict[str, Any]:
         anchor = (
             x,
             HALF_DEPTH,
-            side_sign * (HALF_WEB_TOP_INNER - _norm(0.15)),
+            side_sign * (HALF_WEB_INNER_TOP - _norm(0.15)),
         )
         normal = (0.0, 1.0, 0.0)
         orientation = (1.0, 0.0, 0.0)
@@ -220,17 +224,17 @@ def _sensor_mount(parsed: dict[str, Any], *, x: float) -> dict[str, Any]:
         anchor = (
             x,
             -HALF_DEPTH,
-            side_sign * (HALF_WEB_BOTTOM_INNER - _norm(0.12)),
+            side_sign * (HALF_WEB_INNER_BOTTOM - _norm(0.12)),
         )
         normal = (0.0, -1.0, 0.0)
         orientation = (1.0, 0.0, 0.0)
         surface = "bottom_slab_exterior"
     elif measurement_code.endswith("ACC_Z"):
-        # Placed on the outer face of the bottom slab edge so the glyph
-        # sits outside the deck geometry and is clickable.
+        # Placed on the outer z-face of the bottom slab, anchored at the
+        # exterior bottom face so the arrow sits flush at the deck edge.
         anchor = (
             x,
-            BOTTOM_SLAB_TOP_Y,
+            -HALF_DEPTH,
             side_sign * HALF_BOTTOM_SLAB,
         )
         normal = (0.0, 0.0, float(side_sign))
@@ -239,7 +243,7 @@ def _sensor_mount(parsed: dict[str, Any], *, x: float) -> dict[str, Any]:
     elif measurement_code.endswith("ACC_Y"):
         anchor = (
             x,
-            BOTTOM_SLAB_TOP_Y,
+            -HALF_DEPTH,
             side_sign * HALF_BOTTOM_SLAB,
         )
         normal = (0.0, 0.0, float(side_sign))
@@ -373,10 +377,12 @@ def build_bridge_geometry() -> dict[str, Any]:
             "bottom_slab_width": BOTTOM_SLAB_WIDTH,
             "slab_thickness": SLAB_THICKNESS,
             "web_thickness": WEB_THICKNESS,
-            "web_top_outer_width": WEB_TOP_OUTER_WIDTH,
-            "web_bottom_outer_width": BOTTOM_SLAB_WIDTH,
-            "inner_bottom_width": INNER_BOTTOM_WIDTH,
-            "top_inner_width": TOP_INNER_WIDTH,
+            # Box outer/inner widths stated explicitly at the top and bottom
+            # of the web so the trapezoid tapers inward going down.
+            "web_outer_top_width": WEB_OUTER_TOP_WIDTH,
+            "web_outer_bottom_width": WEB_OUTER_BOTTOM_WIDTH,
+            "web_inner_top_width": WEB_INNER_TOP_WIDTH,
+            "web_inner_bottom_width": WEB_INNER_BOTTOM_WIDTH,
             "overhang_width": OVERHANG_WIDTH,
         },
         "view_modes": {

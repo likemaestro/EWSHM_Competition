@@ -17,6 +17,8 @@ const COLOR = {
   groundText: 0x7b8da7,
 };
 
+const HEALTH_METRIC_ID = "health_anomaly";
+
 const CAM_DEFAULT = { x: 24, y: 12.5, z: -34 };
 const CAM_TARGET = { x: 45, y: -1.2, z: 0 };
 const GROUND_Y = -18;
@@ -32,6 +34,7 @@ const state = {
   trends: [],
   eventGroups: [],
   correlations: [],
+  reportScores: null,
   metricLookup: new Map(),
   trendLookup: new Map(),
   correlationLookup: new Map(),
@@ -40,7 +43,7 @@ const state = {
   selectedDataset: null,
   selectedMetric: "mean_range",
   family: "ALL",
-  viewMode: "exploded",
+  viewMode: "compact",
   compareMode: "single",
   wireframe: false,
   showCorrelations: false,
@@ -88,6 +91,7 @@ const el = {
   tooltip: document.getElementById("tooltip"),
   inspector: document.getElementById("inspector"),
   datasetStrip: document.getElementById("dataset-strip"),
+  healthCard: document.getElementById("health-card"),
   sceneSelection: document.getElementById("scene-selection"),
   tabButtons: Array.from(document.querySelectorAll("[data-tab]")),
   tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
@@ -107,7 +111,7 @@ async function initialize() {
   state.manifest = await fetchJson("./manifest.json");
   const files = state.manifest.files;
 
-  const [geometry, sensorLayout, metrics, trends, eventGroups, correlations] =
+  const [geometry, sensorLayout, metrics, trends, eventGroups, correlations, reportScores] =
     await Promise.all([
       fetchJson(files.bridge_geometry),
       fetchJson(files.sensor_layout),
@@ -115,6 +119,7 @@ async function initialize() {
       fetchJson(files.sensor_trends),
       fetchJson(files.event_groups),
       fetchJson(files.correlations),
+      fetchJson("./report_scores.json").catch(() => null),
     ]);
 
   state.geometry = geometry;
@@ -123,14 +128,52 @@ async function initialize() {
   state.trends = trends;
   state.eventGroups = eventGroups;
   state.correlations = correlations;
+  state.reportScores = reportScores;
   state.selectedDataset = state.manifest.default_dataset;
 
+  injectHealthScores();
   buildLookups();
   buildControls();
   bindStaticEvents();
   initThree();
   buildBridgeScene();
   render();
+  exposeViewerApi();
+}
+
+// Small automation hook: lets screenshot/orbit tooling drive the camera and
+// switch SET/metric from outside the module closure. Harmless in normal use.
+function exposeViewerApi() {
+  window.__viewer = {
+    get camera() {
+      return camera;
+    },
+    get controls() {
+      return controls;
+    },
+    render,
+    resetCamera,
+    setDataset(dataset) {
+      state.selectedDataset = dataset;
+      el.datasetSelect.value = dataset;
+      render();
+    },
+    setMetric(metricId) {
+      state.selectedMetric = metricId;
+      el.metricSelect.value = metricId;
+      render();
+    },
+    orbit(angleDeg, { radius = 46, height = 12 } = {}) {
+      const target = controls.target;
+      const a = (angleDeg * Math.PI) / 180;
+      camera.position.set(
+        target.x + radius * Math.cos(a),
+        target.y + height,
+        target.z + radius * Math.sin(a)
+      );
+      controls.update();
+    },
+  };
 }
 
 function meters(value) {
@@ -166,6 +209,66 @@ function buildLookups() {
     current.push(row);
     state.eventLookup.set(key, current);
   }
+}
+
+// Report-derived health scoring. The Dataset selector doubles as the SET
+// selector; per-SET scores come from the committed report_scores.json so the
+// viewer echoes the two-page report without re-running the pipeline.
+function injectHealthScores() {
+  if (!state.reportScores || !state.reportScores.sets) return;
+  const sets = state.reportScores.sets;
+
+  const healthMetric = {
+    metric_id: HEALTH_METRIC_ID,
+    label: "Health anomaly %",
+    description:
+      "Percentage of events exceeding the 99th-percentile SET1 reconstruction-error threshold. Modality-level.",
+    units_by_family: { ACC: "%", STR: "%" },
+    source: "report",
+  };
+  state.manifest.metric_catalog = [healthMetric, ...state.manifest.metric_catalog];
+
+  for (const dataset of state.manifest.available_datasets) {
+    const scores = scoresForDataset(dataset.dataset);
+    if (!scores) continue;
+    for (const sensor of state.sensorLayout) {
+      const value = sensor.measurement_family === "ACC" ? scores.anom_acc : scores.anom_str;
+      state.metrics.push({
+        dataset: dataset.dataset,
+        metric_id: HEALTH_METRIC_ID,
+        sensor_id: sensor.sensor_id,
+        measurement_family: sensor.measurement_family,
+        value,
+        unit: "%",
+        status_band: "mid",
+        source_stage: "report_scores",
+      });
+    }
+  }
+
+  // Open the viewer in health mode when report scores are available.
+  state.selectedMetric = HEALTH_METRIC_ID;
+}
+
+function setTokenFor(datasetName) {
+  const match = /SET\s*0*([0-9]+)/i.exec(datasetName || "");
+  return match ? `SET${match[1]}` : null;
+}
+
+function scoresForDataset(datasetName) {
+  if (!state.reportScores || !state.reportScores.sets) return null;
+  const token = setTokenFor(datasetName);
+  return token ? state.reportScores.sets[token] ?? null : null;
+}
+
+function healthColorFor(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 0x94a3b8;
+  const v = Number(value);
+  if (v <= 1.5) return 0x2f8f5b; // near reference
+  if (v <= 3.0) return 0x7fa53f;
+  if (v <= 4.5) return 0xd8a11a;
+  if (v <= 6.0) return 0xdd7a17;
+  return 0xb0323d; // most deviated
 }
 
 function buildControls() {
@@ -340,9 +443,90 @@ function render() {
   const visibleSensors = getVisibleSensors();
   syncDatasetStrip();
   updateHeader(visibleSensors);
+  updateHealthCard();
   updateSceneSelection();
   updateSensorGlyphs(visibleSensors);
   renderInspector();
+}
+
+function updateHealthCard() {
+  if (!el.healthCard) return;
+  const scores = scoresForDataset(state.selectedDataset);
+  if (!scores) {
+    el.healthCard.hidden = true;
+    el.healthCard.innerHTML = "";
+    return;
+  }
+  el.healthCard.hidden = false;
+  const healthMode = state.selectedMetric === HEALTH_METRIC_ID;
+  const scoreColor = healthScoreColor(scores.health_score);
+  el.healthCard.style.setProperty("--health-accent", scoreColor);
+
+  el.healthCard.innerHTML = `
+    <div class="health-head">
+      <span class="health-kicker">${scores.label} · health score</span>
+      <div class="health-score" style="color:${scoreColor}">
+        ${formatScore(scores.health_score)}<span class="health-score-max">/ 100</span>
+      </div>
+      <p class="health-note">${scores.note || ""}</p>
+    </div>
+    <div class="health-rates">
+      ${healthRateChip("All", scores.anom_all)}
+      ${healthRateChip("Acc", scores.anom_acc)}
+      ${healthRateChip("Strain", scores.anom_str)}
+    </div>
+    ${healthMode ? healthLegendMarkup() : ""}
+    <p class="health-provenance">
+      Events over the 99th-pct SET1 threshold. SET1 = healthiest reference (100).
+      From the EWSHM 2026 report.
+    </p>`;
+}
+
+function healthScoreColor(score) {
+  const cssByHex = healthColorFor(scoreToAnomalyProxy(score));
+  return `#${cssByHex.toString(16).padStart(6, "0")}`;
+}
+
+// Higher health score = healthier = lower anomaly. Map to the same ramp so the
+// headline number and the glyph colors read consistently.
+function scoreToAnomalyProxy(score) {
+  const s = Number(score);
+  if (Number.isNaN(s)) return null;
+  return Math.max(0, (100 - s) / 12);
+}
+
+function formatScore(score) {
+  const s = Number(score);
+  if (Number.isNaN(s)) return "n/a";
+  return Number.isInteger(s) ? `${s}` : s.toFixed(1);
+}
+
+function healthRateChip(label, value) {
+  const hex = healthColorFor(value);
+  const css = `#${hex.toString(16).padStart(6, "0")}`;
+  const text = value === null || value === undefined ? "n/a" : `${Number(value).toFixed(2)}%`;
+  return `<div class="health-rate">
+    <span class="health-rate-dot" style="background:${css}"></span>
+    <span class="health-rate-label">${label}</span>
+    <span class="health-rate-value">${text}</span>
+  </div>`;
+}
+
+function healthLegendMarkup() {
+  const stops = [
+    ["≤1.5%", 0x2f8f5b],
+    ["≤3%", 0x7fa53f],
+    ["≤4.5%", 0xd8a11a],
+    ["≤6%", 0xdd7a17],
+    [">6%", 0xb0323d],
+  ];
+  const chips = stops
+    .map(([label, hex]) => {
+      const css = `#${hex.toString(16).padStart(6, "0")}`;
+      return `<span class="health-ramp-chip"><i style="background:${css}"></i>${label}</span>`;
+    })
+    .join("");
+  return `<div class="health-ramp"><span class="health-ramp-title">Glyph anomaly %</span>${chips}</div>`;
 }
 
 function updateHeader(visibleSensors) {
@@ -559,10 +743,10 @@ function buildDecks() {
   const topWidth = meters(cross.top_slab_width);
   const bottomWidth = meters(cross.bottom_slab_width);
   const slabThickness = meters(cross.slab_thickness);
-  const webTopOuterHalf = meters(cross.web_top_outer_width / 2);
-  const webBottomOuterHalf = meters(cross.web_bottom_outer_width / 2);
-  const webTopInnerHalf = meters((cross.web_top_outer_width - (2 * cross.web_thickness)) / 2);
-  const webBottomInnerHalf = meters(cross.inner_bottom_width / 2);
+  const webOuterTopHalf = meters(cross.web_outer_top_width / 2);
+  const webOuterBottomHalf = meters(cross.web_outer_bottom_width / 2);
+  const webInnerTopHalf = meters(cross.web_inner_top_width / 2);
+  const webInnerBottomHalf = meters(cross.web_inner_bottom_width / 2);
   const halfDepth = depth / 2;
   const topSlabCenterY = halfDepth - (slabThickness / 2);
   const bottomSlabCenterY = -halfDepth + (slabThickness / 2);
@@ -625,16 +809,16 @@ function buildDecks() {
 
       const webProfiles = [
         [
-          [-webBottomOuterHalf, webTopY],
-          [-webBottomInnerHalf, webTopY],
-          [-webTopInnerHalf, webBottomY],
-          [-webTopOuterHalf, webBottomY],
+          [-webOuterTopHalf, webTopY],
+          [-webInnerTopHalf, webTopY],
+          [-webInnerBottomHalf, webBottomY],
+          [-webOuterBottomHalf, webBottomY],
         ],
         [
-          [webBottomInnerHalf, webTopY],
-          [webBottomOuterHalf, webTopY],
-          [webTopOuterHalf, webBottomY],
-          [webTopInnerHalf, webBottomY],
+          [webInnerTopHalf, webTopY],
+          [webOuterTopHalf, webTopY],
+          [webOuterBottomHalf, webBottomY],
+          [webInnerBottomHalf, webBottomY],
         ],
       ];
 
@@ -663,40 +847,54 @@ function buildDecks() {
 
 function addDeckLabel(group, deckName) {
   const halfDepth = meters(state.geometry.cross_section.depth) / 2;
-  const color = deckName === "OLD" ? "#7f6f59" : "#4d7b79";
+  const color = deckName === "OLD" ? "#6b5b45" : "#2f5f5d";
 
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 80;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, 512, 80);
-  ctx.font = "900 52px Manrope, sans-serif";
-  ctx.fillStyle = color;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`${deckName} deck`, 256, 40);
+  // Text painted flat on the top slab, reading along the bridge. A single
+  // upward-facing (FrontSide) plane avoids the mirrored back-face artifact,
+  // and a non-flipped texture keeps the letters the right way round.
+  const canvas = createTextCanvas(`${deckName} deck`, {
+    width: 1024,
+    height: 160,
+    fontSize: 104,
+    color,
+    paddingX: 60,
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
 
   const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(52, 7),
+    new THREE.PlaneGeometry(30, 4.7),
     new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(canvas),
+      map: texture,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.92,
       depthWrite: false,
       side: THREE.DoubleSide,
     })
   );
+  // Lay the plane flat on top of the slab, letters reading along +x.
   plane.rotation.x = -Math.PI / 2;
-  plane.position.set(45, halfDepth + 0.06, 0);
+  plane.position.set(24, halfDepth + 0.08, 0);
+  plane.renderOrder = 4;
   group.add(plane);
+}
+
+function pierX(x) {
+  // Tuck the end supports just inside the deck ends so the column sits under
+  // the deck rather than half-past its edge; leave interior piers where they are.
+  const bridgeLength = meters(state.geometry.world.bridge_length_m / state.geometry.world.meters_per_normalized_unit);
+  if (x <= 1) return x + 2.5;
+  if (x >= bridgeLength - 1) return x - 2.5;
+  return x;
 }
 
 function buildPiers() {
   const cross = state.geometry.cross_section;
   const halfDepth = meters(cross.depth) / 2;
+  const deckWidth = meters(cross.top_slab_width);
   const padHeight = 0.7;
-  const columnHeight = 14.0;
   const footingHeight = 1.0;
+  const groundY = GROUND_Y;
   const viewModes = state.geometry.view_modes;
 
   for (const deckData of state.geometry.deck_meshes) {
@@ -705,29 +903,28 @@ function buildPiers() {
     pierGroups[deckData.deck] = group;
     scene.add(group);
 
+    // Every support is the same round column: pad + tall column + footing,
+    // sitting on the ground and centered under the deck.
+    const columnHeight = -halfDepth - groundY - padHeight - footingHeight;
     for (const pier of state.geometry.pier_anchors) {
-      const x = meters(pier.x);
+      const x = pierX(meters(pier.x));
       const material = new THREE.MeshStandardMaterial({ color: COLOR.pier, roughness: 0.92 });
 
-      const pad = new THREE.Mesh(new THREE.BoxGeometry(4.8, padHeight, 2.8), material);
-      pad.position.set(x, -(halfDepth + (padHeight / 2)), 0);
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(4.8, padHeight, deckWidth * 0.5), material);
+      pad.position.set(x, -(halfDepth + padHeight / 2), 0);
       pad.castShadow = true;
       group.add(pad);
 
       const column = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.95, 1.35, columnHeight, 10),
+        new THREE.CylinderGeometry(1.05, 1.5, columnHeight, 16),
         material
       );
-      column.position.set(x, -(halfDepth + padHeight + (columnHeight / 2)), 0);
+      column.position.set(x, -(halfDepth + padHeight + columnHeight / 2), 0);
       column.castShadow = true;
       group.add(column);
 
       const footing = new THREE.Mesh(new THREE.BoxGeometry(5.4, footingHeight, 5.4), material);
-      footing.position.set(
-        x,
-        -(halfDepth + padHeight + columnHeight + (footingHeight / 2)),
-        0
-      );
+      footing.position.set(x, groundY + footingHeight / 2, 0);
       footing.castShadow = true;
       group.add(footing);
     }
@@ -873,7 +1070,7 @@ function updateSensorGlyphs(visibleSensors) {
 
     if (sensorObjs.has(sensor.sensor_id)) {
       const object = sensorObjs.get(sensor.sensor_id);
-      const color = glyphColor(sensor, isHigh, isSelected);
+      const color = glyphColor(sensor, isHigh, isSelected, metric);
       for (const mesh of object.meshes) {
         mesh.material.color.setHex(color);
         mesh.material.emissive?.setHex(isSelected ? 0x143763 : 0x000000);
@@ -915,8 +1112,9 @@ function updateSensorGlyphs(visibleSensors) {
   syncSelectionLight();
 }
 
-function glyphColor(sensor, isHigh, isSelected) {
+function glyphColor(sensor, isHigh, isSelected, metric) {
   if (isSelected) return COLOR.selected;
+  if (state.selectedMetric === HEALTH_METRIC_ID) return healthColorFor(metric?.value);
   if (isHigh) return COLOR.highAmber;
   return sensor.measurement_family === "ACC" ? COLOR.accRed : COLOR.strBlue;
 }
@@ -927,7 +1125,7 @@ function buildGlyph(sensor, metric, isSelected) {
   const isHigh = metric?.status_band === "high";
 
   const material = () => new THREE.MeshPhysicalMaterial({
-    color: glyphColor(sensor, isHigh, isSelected),
+    color: glyphColor(sensor, isHigh, isSelected, metric),
     roughness: 0.28,
     metalness: 0.08,
     clearcoat: 0.4,
@@ -937,7 +1135,7 @@ function buildGlyph(sensor, metric, isSelected) {
     opacity: metric?.status_band === "low" ? 0.34 : 1.0,
   });
 
-  const size = 0.55;
+  const size = 0.78;
 
   if (sensor.measurement_family === "ACC") {
     const shaft = new THREE.Mesh(

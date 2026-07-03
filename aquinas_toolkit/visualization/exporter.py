@@ -21,7 +21,7 @@ from aquinas_toolkit.utils.run_management import RunContext, read_metadata
 from aquinas_toolkit.visualization.layout import build_bridge_geometry, build_sensor_layout
 
 SCHEMA_VERSION = "2026-04-13"
-VIEWER_ASSET_NAMES = ("index.html", "viewer.css", "viewer.js", "logo.png")
+VIEWER_ASSET_NAMES = ("index.html", "viewer.css", "viewer.js", "logo.png", "report_scores.json")
 MAX_WAVEFORM_PREVIEWS_PER_DECK = 2
 MAX_WAVEFORM_SAMPLES = 240
 

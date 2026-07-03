@@ -102,7 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional human-readable label stored in metadata when creating a new run.",
     )
     parser.add_argument(
-        "--run-id",
+        "--run-id", "--run_id",
+        dest="run_id",
         help="Existing run ID to resume for features, train, or score.",
     )
     parser.add_argument(

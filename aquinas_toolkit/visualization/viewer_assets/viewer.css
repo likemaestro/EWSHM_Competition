@@ -8,7 +8,8 @@
   --border: #d8e0ea;
   --border-strong: #b7c4d6;
   --text: #152234;
-  --muted: #5e6d82;
+  --muted: #45536a;
+  --focus-ring: #2f6bd8;
   --accent: #102c53;
   --accent-soft: rgba(16, 44, 83, 0.08);
   --accent-strong: #173d73;
@@ -51,12 +52,24 @@ input {
   font: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.secondary-control label,
+.control label,
+.control span {
+  color: var(--muted);
+}
+
 .app-shell {
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
-  padding: 16px;
+  padding: 12px;
   overflow: hidden;
 }
 
@@ -68,10 +81,11 @@ input {
 
 .topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 16px 20px;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
   border: 1px solid rgba(16, 44, 83, 0.06);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.9);
@@ -82,15 +96,15 @@ input {
 .brand {
   display: flex;
   gap: 14px;
-  align-items: flex-start;
+  align-items: center;
+  min-width: 0;
 }
 
 .brand-logo {
-  width: 150px;
-  max-width: min(30vw, 150px);
+  width: 160px;
+  max-width: min(28vw, 160px);
   height: auto;
   flex: 0 0 auto;
-  margin-top: 2px;
 }
 
 .eyebrow {
@@ -110,7 +124,7 @@ input {
 
 .brand h1 {
   margin: 0;
-  font-size: 1.55rem;
+  font-size: 1.32rem;
   font-weight: 800;
   letter-spacing: -0.03em;
   color: var(--accent);
@@ -131,11 +145,11 @@ input {
 }
 
 .brand-subtitle {
-  margin: 4px 0 0;
-  max-width: 620px;
+  margin: 2px 0 0;
+  max-width: 420px;
   color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.42;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .topbar-controls {
@@ -151,38 +165,36 @@ input {
 }
 
 .topbar-control-dataset {
-  width: clamp(260px, 24vw, 360px);
+  width: clamp(220px, 18vw, 300px);
 }
 
 .topbar-control-metric {
-  width: clamp(180px, 14vw, 220px);
+  width: clamp(160px, 12vw, 210px);
 }
 
 .tabbar {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: fit-content;
-  padding: 6px;
+  padding: 5px;
   border: 1px solid rgba(16, 44, 83, 0.08);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.84);
   box-shadow: var(--shadow-sm);
-  margin-left: 10px;
-  margin-top: -2px;
-  position: relative;
-  z-index: 1;
 }
 
 .tab-button {
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-radius: 999px;
   cursor: pointer;
   font-weight: 700;
+  font-size: 0.86rem;
   letter-spacing: -0.01em;
+  white-space: nowrap;
   transition: background 120ms, color 120ms, box-shadow 120ms;
 }
 
@@ -221,7 +233,7 @@ input {
 
 .scene-layout {
   display: grid;
-  grid-template-columns: 276px minmax(0, 1fr);
+  grid-template-columns: clamp(300px, 23vw, 340px) minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -234,20 +246,26 @@ input {
 
 .scene-sidebar {
   min-height: 0;
-  overflow: auto;
-  display: grid;
-  align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   padding-right: 8px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
+.scene-sidebar > .panel {
+  flex: 0 0 auto;
+}
+
 .panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid rgba(16, 44, 83, 0.08);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.94);
@@ -853,4 +871,122 @@ select:focus {
   .scene-wrap {
     min-height: 520px;
   }
+}
+
+/* Report health-score card */
+.health-panel {
+  --health-accent: var(--accent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--health-accent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--health-accent) 8%, #ffffff) 0%, var(--surface-2) 46%);
+}
+
+.health-panel[hidden] {
+  display: none;
+}
+
+.health-kicker {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.health-score {
+  font-size: 2.6rem;
+  font-weight: 800;
+  line-height: 1.05;
+  margin-top: 2px;
+}
+
+.health-score-max {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.health-note {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.health-rates {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.health-rate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.health-rate-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.health-rate-label {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.health-rate-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.health-ramp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.health-ramp-title {
+  width: 100%;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.health-ramp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.health-ramp-chip i {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.health-provenance {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
 }

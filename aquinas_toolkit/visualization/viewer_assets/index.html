@@ -20,14 +20,19 @@
         <div class="brand">
           <img class="brand-logo" src="./logo.png" alt="AQUINAS Toolkit logo" />
           <div>
-            <p class="eyebrow">AQUINAS</p>
             <div class="brand-title-row">
-              <h1>Bridge Structural Viewer</h1>
-              <span class="wip-badge" title="Proxy metrics only — health scoring not yet implemented">WIP</span>
+              <h1>Bridge Viewer</h1>
+              <span class="wip-badge" title="Analytical geometry with proxy metrics; Health mode shows the report's SET-level scores and modality-level anomaly %.">WIP</span>
             </div>
             <p class="brand-subtitle">Analytical bridge geometry and sensor behavior across AQUINAS datasets.</p>
           </div>
         </div>
+
+        <nav class="tabbar" aria-label="Viewer sections">
+          <button class="tab-button active" data-tab="scene" type="button">3D View</button>
+          <button class="tab-button" data-tab="analysis" type="button">Sensor Analysis</button>
+          <button class="tab-button" data-tab="datasets" type="button">Datasets</button>
+        </nav>
 
         <div class="topbar-controls">
           <div class="control topbar-control topbar-control-dataset">
@@ -44,16 +49,12 @@
         </div>
       </header>
 
-      <nav class="tabbar" aria-label="Viewer sections">
-        <button class="tab-button active" data-tab="scene" type="button">3D View</button>
-        <button class="tab-button" data-tab="analysis" type="button">Sensor Analysis</button>
-        <button class="tab-button" data-tab="datasets" type="button">Datasets</button>
-      </nav>
-
       <main class="tab-panels">
         <section class="tab-panel active" data-tab-panel="scene">
           <div class="scene-layout">
             <aside class="scene-sidebar">
+              <div id="health-card" class="panel health-panel" hidden></div>
+
               <div class="panel control-panel">
                 <div class="panel-header">
                   <div>
@@ -170,8 +171,11 @@
             <section class="panel dataset-notes">
               <h2>Context</h2>
               <p class="card-note">
-                The viewer uses analytical bridge geometry paired with index-table proxy metrics
-                until later scoring stages are implemented.
+                In <strong>Health</strong> mode the viewer shows the EWSHM 2026 report's SET-level
+                health scores and colors sensor glyphs by that SET's modality-level anomaly %
+                (accelerometers vs strain), from the report's 99th-percentile SET1 threshold.
+                Switch the Metric selector to a <strong>proxy metric</strong> for exploratory
+                index-table statistics.
               </p>
               <p class="card-note">
                 Sensor positions reflect handbook topology plus a small readability offset so

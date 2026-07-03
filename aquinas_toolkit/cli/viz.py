@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="viz_command")
 
     build_parser = subparsers.add_parser("build", add_help=False)
-    build_parser.add_argument("--run-id", help="Existing run ID. Defaults to results/latest.json.")
+    build_parser.add_argument("--run-id", "--run_id", dest="run_id", help="Existing run ID. Defaults to results/latest.json.")
     build_parser.add_argument(
         "--set",
         dest="sets",
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     open_parser = subparsers.add_parser("open", add_help=False)
-    open_parser.add_argument("--run-id", help="Existing run ID. Defaults to results/latest.json.")
+    open_parser.add_argument("--run-id", "--run_id", dest="run_id", help="Existing run ID. Defaults to results/latest.json.")
     open_parser.add_argument(
         "--output",
         help="Optional bundle directory. Defaults to results/<run_id>/visualization.",

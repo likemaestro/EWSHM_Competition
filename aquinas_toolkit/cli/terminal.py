@@ -53,6 +53,32 @@ CLI_THEME = Theme(
 
 _ACTIVE_PROGRESS: ContextVar[Progress | None] = ContextVar("_ACTIVE_PROGRESS", default=None)
 
+_BANNER_AQUINAS = (
+    " █████╗  ██████╗ ██╗   ██╗██╗███╗   ██╗ █████╗ ███████╗\n"
+    "██╔══██╗██╔═══██╗██║   ██║██║████╗  ██║██╔══██╗██╔════╝\n"
+    "███████║██║   ██║██║   ██║██║██╔██╗ ██║███████║███████╗\n"
+    "██╔══██║██║▄▄ ██║██║   ██║██║██║╚██╗██║██╔══██║╚════██║\n"
+    "██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║  ██║███████║\n"
+    "╚═╝  ╚═╝ ╚══▀▀═╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝"
+)
+
+_BANNER_TOOLKIT = (
+    "                                        ████████╗ ██████╗  ██████╗ ██╗     ██╗  ██╗██╗████████╗\n"
+    "                                        ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██║ ██╔╝██║╚══██╔══╝\n"
+    "                                           ██║   ██║   ██║██║   ██║██║     █████╔╝ ██║   ██║   \n"
+    "                                           ██║   ██║   ██║██║   ██║██║     ██╔═██╗ ██║   ██║   \n"
+    "                                           ██║   ╚██████╔╝╚██████╔╝███████╗██║  ██╗██║   ██║   \n"
+    "                                           ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝   ╚═╝  "
+)
+
+
+def _render_banner() -> Group:
+    """Render the two-part AQUINAS TOOLKIT ASCII art banner."""
+    return Group(
+        Text(_BANNER_AQUINAS, style="bold bright_blue", no_wrap=True),
+        Text(_BANNER_TOOLKIT, style="cyan", no_wrap=True),
+    )
+
 class CLIView:
     """Simple wrapper that lets tests assert on the underlying plain text."""
 
@@ -385,12 +411,7 @@ def render_top_level_help() -> CLIView:
 
     return CLIView(
         Group(
-            Panel.fit(
-                Text("AQUINAS CLI", style="header"),
-                title="Toolkit",
-                border_style="accent",
-                box=box.ROUNDED,
-            ),
+            _render_banner(),
             usage,
             commands,
             Panel(notes, title="Usage Notes", border_style="accent", box=box.ROUNDED),
@@ -931,7 +952,10 @@ def render_about(*, version_text: str) -> CLIView:
         "  - Zhenkun Li"
     )
     return CLIView(
-        Panel(details, title="AQUINAS About", border_style="accent", box=box.ROUNDED),
+        Group(
+            _render_banner(),
+            Panel(details, title="AQUINAS About", border_style="accent", box=box.ROUNDED),
+        ),
         plain_text,
     )
 

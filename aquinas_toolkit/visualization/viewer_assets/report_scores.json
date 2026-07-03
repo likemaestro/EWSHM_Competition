@@ -1,0 +1,15 @@
+{
+  "provenance": "EWSHM 2026 two-page report — attention-autoencoder reconstruction-error health score.",
+  "reference_set": "SET1",
+  "reference_note": "SET1 (Jul 2022) is the healthiest reference period; the model and 99th-percentile threshold are fixed from SET1 and applied to SET2-SET5 without re-fitting.",
+  "score_definition": "SET-level health score (0-100): autoencoder aggregate deviation index, 100 = SET1 reference.",
+  "anomaly_definition": "Percentage of events exceeding the 99th-percentile SET1 reconstruction-error threshold (report Table 1).",
+  "coloring_note": "Glyph coloring is modality-level (all accelerometers share the SET acc %, all strain gauges the SET strain %), from the report — not a per-sensor score.",
+  "sets": {
+    "SET1": {"label": "Jul 2022", "health_score": 100.0, "anom_all": 1.00, "anom_acc": 1.00, "anom_str": 1.00, "note": "Training reference — healthiest state."},
+    "SET2": {"label": "Apr 2023", "health_score": 53.0, "anom_all": 5.74, "anom_acc": 5.50, "anom_str": 3.14, "note": "Second-largest deviation from baseline."},
+    "SET3": {"label": "Aug 2023", "health_score": 74.3, "anom_all": 3.53, "anom_acc": 3.15, "anom_str": 2.60, "note": "Closest in season to SET1 — least deviated held-out period."},
+    "SET4": {"label": "Jan 2024", "health_score": 46.8, "anom_all": 6.32, "anom_acc": 5.74, "anom_str": 3.63, "note": "Coldest period (6.6 C) — most deviated from baseline."},
+    "SET5": {"label": "Jun 2024", "health_score": 67.0, "anom_all": 4.19, "anom_acc": 3.92, "anom_str": 3.49, "note": "Warm period — moderate deviation."}
+  }
+}

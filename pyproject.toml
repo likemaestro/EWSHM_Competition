@@ -52,7 +52,13 @@ lint.select = [
 include = ["aquinas_toolkit*"]
 
 [tool.setuptools.package-data]
-"aquinas_toolkit.visualization" = ["viewer_assets/*.html", "viewer_assets/*.css", "viewer_assets/*.js"]
+"aquinas_toolkit.visualization" = [
+    "viewer_assets/*.html",
+    "viewer_assets/*.css",
+    "viewer_assets/*.js",
+    "viewer_assets/*.png",
+    "viewer_assets/*.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
