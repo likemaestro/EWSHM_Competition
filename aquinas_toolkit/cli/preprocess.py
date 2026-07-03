@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="preprocess_command")
 
     quicklook_parser = subparsers.add_parser("quicklook", add_help=False)
-    quicklook_parser.add_argument("--run-id", help="Existing run ID. Defaults to results/latest.json.")
+    quicklook_parser.add_argument("--run-id", "--run_id", dest="run_id", help="Existing run ID. Defaults to results/latest.json.")
     quicklook_parser.add_argument(
         "--event-index",
         type=int,

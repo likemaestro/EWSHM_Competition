@@ -2,22 +2,30 @@
 
 ## Purpose
 
-Build an offline, analytical 3D bridge viewer for AQUINAS runs.
-This package converts dataset metadata and run outputs into a stable
-visualization schema, then packages a portable static viewer bundle.
+Build an offline, interactive 3D bridge viewer for AQUINAS runs that presents
+the report's health-score findings spatially on the viaduct geometry.
 
-The viewer is intended to answer three practical questions:
+Selecting a **Dataset (SET1–SET5)** instantly updates:
+
+- **Health score headline** — the autoencoder-derived SET-level score
+  (100 / 53 / 74.3 / 46.8 / 67) in a pinned sidebar card with a color-coded
+  accent (green → amber → red with declining health).
+- **Sensor glyphs colored by anomaly %** — each glyph is tinted by the
+  baseline-model flagged-event rate for that SET, modality, and channel,
+  using a five-band color scale consistent with the report's Table 2.
+- **Secondary proxy metrics** — event count, mean range, mean value, mean
+  duration, and mean temperature selectable as alternative colorings.
+
+Spatial questions answered:
 
 - Where is each sensor located on the bridge?
-- How is that sensor behaving across the available monthly datasets?
-- How do accelerometers and strain sensors compare across decks,
-  spans, sections, and homologous sensor locations?
+- How does that sensor's anomaly rate vary across the five monthly datasets?
+- How do accelerometers and strain sensors compare across decks, spans,
+  sections, and homologous locations?
 
 ## Status
 
-**Work in progress (WIP).** A WIP badge is shown in the viewer topbar
-as a reminder that proxy metrics are in use and viewer integration with
-the notebook-backed health-score narrative remains separate.
+**Work in progress (WIP).** A WIP badge is shown in the viewer topbar.
 
 Current capabilities:
 
@@ -28,19 +36,23 @@ Current capabilities:
 - Export a portable visualization bundle with:
   `manifest.json`, `bridge_geometry.json`, `sensor_layout.json`,
   `sensor_metrics.json`, `sensor_trends.json`, `event_groups.json`,
-  `correlations.json`, and optional waveform previews
+  `correlations.json`, `report_scores.json`, and optional waveform previews
 - Package a static offline viewer from
   `aquinas_toolkit/visualization/viewer_assets/`
 - Drive the bundle from the CLI via `aquinas viz build`
 - Refresh the bundle automatically from `aquinas run ...` when the run
   config points to a locally available AQUINAS dataset tree
+- **Health-score mode:** load `report_scores.json` (transcribed from the
+  two-page report) to drive SET-level health cards and per-modality glyph
+  coloring directly from the report's findings — no full pipeline re-run
+  required.
 
 Current WIP boundary:
 
-- The viewer uses proxy metrics derived from AQUINAS index-table fields such as
-  `Range`, `Mean_Value`, `Duration`, `Temperature`, and event count.
-- Spatial semantics come from the AQUINAS dataset README and handbook,
-  but the shear-section placement is still an analytical approximation:
+- Health-mode numbers are sourced from a static `report_scores.json`
+  transcribed from the two-page report. They are not recomputed at viewer
+  build time.
+- Shear-section placement is still an analytical approximation:
   the handbook only says those sensors are located "near pier 1", so the
   viewer places `S1_SHE` and `S2_SHE` close to the pier rather than
   claiming an exact surveyed position.
@@ -105,8 +117,8 @@ contains the 3D canvas.
 
 | Control | Description |
 |---------|-------------|
-| **Dataset** dropdown | Switch between the available monthly AQUINAS sets. Metric values update immediately. |
-| **Metric** dropdown | Choose which proxy metric to colour-scale: event count, mean range, mean absolute mean value, mean duration, or mean temperature. |
+| **Dataset** dropdown | Switch between the available monthly AQUINAS sets. Metric values and the health card update immediately. |
+| **Metric** dropdown | Choose the coloring: **Health anomaly %** (report-derived, default) or proxy metrics — event count, mean range, mean absolute mean value, mean duration, mean temperature. |
 | **Reset view** button | Return the camera to its default position. |
 
 **3D scene interactions:**
@@ -187,10 +199,10 @@ the deck, so it is always visible and raycaster-reachable:
 | `SHE_STR` (shear strain) | Double-headed horizontal bar | Outer face of web at mid-height |
 
 Glyph colour encodes metric status:
-- **Blue** — strain sensor, normal range
-- **Red** — accelerometer, normal range
-- **Amber** — any sensor with a high relative value for the selected metric
-- **Dark navy** — currently selected sensor
+- **Health anomaly % mode** (default): a five-band ramp from green (≤1 % — SET1
+  reference) through amber to deep red (>6 %), matching the report's Table 2.
+- **Proxy metric mode**: Blue — strain normal; Red — accelerometer normal;
+  Amber — high relative value; Dark navy — selected sensor.
 
 A small invisible sphere (`SphereGeometry`) is added to each glyph as the
 raycaster pick target to give a generous click area.

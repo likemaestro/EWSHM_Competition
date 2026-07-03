@@ -184,6 +184,38 @@ def test_resolve_run_fails_when_latest_pointer_targets_run_missing_metadata(
         run_management.resolve_run()
 
 
+def test_resolve_run_falls_back_to_newest_run_when_pointer_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    run_context = run_management.create_run(name="new-deck")
+
+    # Point latest.json at a run folder that no longer exists.
+    run_management.write_latest_pointer(run_context.results_dir, "does-not-exist")
+
+    with pytest.warns(UserWarning, match="falling back to newest run"):
+        resolved = run_management.resolve_run()
+
+    assert resolved.run_id == run_context.run_id
+
+
+def test_resolve_run_still_raises_when_no_valid_run_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_default_config(tmp_path)
+    run_context = run_management.create_run()
+    # Remove the only run's config so no valid fallback candidate remains.
+    run_context.config_path.unlink()
+    run_management.write_latest_pointer(run_context.results_dir, "does-not-exist")
+
+    with pytest.raises(run_management.RunManagementError, match="missing run"):
+        run_management.resolve_run()
+
+
 def test_validate_stage_can_run_rejects_completed_stage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

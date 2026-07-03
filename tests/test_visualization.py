@@ -165,17 +165,17 @@ def test_build_sensor_layout_exports_mount_metadata() -> None:
     assert old_sup["surface_normal"] == {"x": 0.0, "y": 1.0, "z": 0.0}
     assert old_sup["glyph_orientation"] == {"x": 1.0, "y": 0.0, "z": 0.0}
     assert old_sup["local_position"]["y"] > old_sup["anchor_local"]["y"]
-    assert old_sup["compact_z"] == pytest.approx(0.1733, abs=1e-4)
+    assert old_sup["compact_z"] == pytest.approx(0.1844, abs=1e-4)
 
     assert old_inf["mount_surface"] == "bottom_slab_exterior"
     assert old_inf["surface_normal"] == {"x": 0.0, "y": -1.0, "z": 0.0}
     assert old_inf["local_position"]["y"] < old_inf["anchor_local"]["y"]
-    assert old_inf["compact_z"] == pytest.approx(0.0982, abs=1e-4)
+    assert old_inf["compact_z"] == pytest.approx(0.1149, abs=1e-4)
 
     assert old_acc_y["mount_surface"] == "web_outer_face"
     assert old_acc_y["glyph_orientation"] == {"x": 0.0, "y": 0.0, "z": 1.0}
     assert old_acc_y["surface_normal"] == {"x": 0.0, "y": 0.0, "z": -1.0}
-    assert old_acc_y["compact_z"] == pytest.approx(0.0851, abs=1e-3)
+    assert old_acc_y["compact_z"] == pytest.approx(0.1018, abs=1e-3)
 
     assert new_she["mount_surface"] == "web_outer_face"
     assert new_she["glyph_orientation"]["x"] < 0
@@ -192,10 +192,10 @@ def test_build_bridge_geometry_exports_shared_cross_section() -> None:
     assert geometry["world"]["bridge_length_m"] == 90.0
     assert cross_section["depth"] == pytest.approx(2.0 / 45.0)
     assert cross_section["top_slab_width"] == pytest.approx(7.5 / 45.0)
-    assert cross_section["bottom_slab_width"] == pytest.approx(4.7 / 45.0)
+    assert cross_section["bottom_slab_width"] == pytest.approx(3.2 / 45.0)
     assert cross_section["slab_thickness"] == pytest.approx(0.30 / 45.0)
     assert cross_section["web_thickness"] == pytest.approx(0.35 / 45.0)
-    assert cross_section["overhang_width"] == pytest.approx(1.75 / 45.0)
+    assert cross_section["overhang_width"] == pytest.approx(1.25 / 45.0)
     assert geometry["view_modes"]["compact"]["deck_centers"] == {"OLD": 0.14, "NEW": -0.14}
     assert geometry["view_modes"]["exploded"]["deck_centers"] == {"OLD": 0.22, "NEW": -0.22}
     assert first_segment["x_start"] == 0.0
@@ -241,8 +241,12 @@ def test_build_visualization_artifacts_exports_bundle(
     assert old_acc_y["glyph_orientation"] == {"x": 0.0, "y": 0.0, "z": 1.0}
 
     bridge_geometry = json.loads((result.output_dir / "bridge_geometry.json").read_text(encoding="utf-8"))
-    assert bridge_geometry["cross_section"]["web_top_outer_width"] == pytest.approx(4.0 / 45.0)
-    assert bridge_geometry["cross_section"]["inner_bottom_width"] == pytest.approx(4.0 / 45.0)
+    cross_section = bridge_geometry["cross_section"]
+    assert cross_section["web_outer_top_width"] == pytest.approx(5.0 / 45.0)
+    assert cross_section["web_outer_bottom_width"] == pytest.approx(3.2 / 45.0)
+    # The trapezoidal box must be wider at the top than at the bottom.
+    assert cross_section["web_outer_top_width"] > cross_section["web_outer_bottom_width"]
+    assert cross_section["bottom_slab_width"] < cross_section["top_slab_width"]
     assert bridge_geometry["world"]["bridge_length_m"] == 90.0
 
     metrics = json.loads((result.output_dir / "sensor_metrics.json").read_text(encoding="utf-8"))

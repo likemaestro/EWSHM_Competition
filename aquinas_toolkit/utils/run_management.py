@@ -148,12 +148,28 @@ def resolve_run(run_id: str | None = None) -> RunContext:
     run_dir = results_dir / resolved_run_id
     if not run_dir.is_dir():
         if run_id is None:
-            raise RunManagementError(
-                f"Active run pointer points to missing run '{resolved_run_id}' in {results_dir}. "
-                "Start a new run with `aquinas run` or `aquinas run preprocess`, "
-                "or pass `--run-id`."
-            )
-        raise RunManagementError(f"Run '{resolved_run_id}' was not found in {results_dir}.")
+            # The latest pointer can go stale (e.g. its run folder was deleted
+            # or renamed). Fall back to the newest complete run so read-only
+            # commands like `aquinas viz open` keep working instead of hard
+            # failing; the user is told which run was chosen.
+            fallback_run_id = _latest_valid_run_id(results_dir)
+            if fallback_run_id and fallback_run_id != resolved_run_id:
+                warnings.warn(
+                    f"Active run pointer points to missing run '{resolved_run_id}'; "
+                    f"falling back to newest run '{fallback_run_id}'. "
+                    "Pass `--run-id` to select a specific run.",
+                    stacklevel=2,
+                )
+                resolved_run_id = fallback_run_id
+                run_dir = results_dir / resolved_run_id
+            else:
+                raise RunManagementError(
+                    f"Active run pointer points to missing run '{resolved_run_id}' in {results_dir}. "
+                    "Start a new run with `aquinas run` or `aquinas run preprocess`, "
+                    "or pass `--run-id`."
+                )
+        else:
+            raise RunManagementError(f"Run '{resolved_run_id}' was not found in {results_dir}.")
 
     run_config_path = run_dir / RUN_CONFIG_NAME
     metadata_path = run_dir / METADATA_NAME
@@ -170,6 +186,35 @@ def resolve_run(run_id: str | None = None) -> RunContext:
         metadata_path=metadata_path,
         debug_log_path=run_dir / "debug.log",
     )
+
+
+def _latest_valid_run_id(results_dir: Path) -> str | None:
+    """Return the newest run directory that has a config and metadata.
+
+    "Newest" is decided by the metadata ``created_at_utc`` timestamp, falling
+    back to the directory modification time when that field is unavailable.
+    Returns ``None`` when no complete run exists.
+    """
+    if not results_dir.is_dir():
+        return None
+
+    candidates: list[tuple[str, float, str]] = []
+    for entry in results_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if not (entry / RUN_CONFIG_NAME).is_file() or not (entry / METADATA_NAME).is_file():
+            continue
+        created_at = ""
+        try:
+            created_at = str(read_metadata(entry).get("created_at_utc", "") or "")
+        except RunManagementError:
+            created_at = ""
+        candidates.append((created_at, entry.stat().st_mtime, entry.name))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[-1][2]
 
 
 def read_latest_pointer(results_dir: Path) -> dict[str, Any]:
