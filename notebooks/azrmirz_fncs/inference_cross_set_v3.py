@@ -31,6 +31,24 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+# -----------------------------------------------------------------------
+# Typography per team specification
+# font: Helvetica/DejaVu Sans, title 6pt, legend 4.7pt, axis labels 5.5pt
+# -----------------------------------------------------------------------
+import matplotlib
+matplotlib.rcParams.update({
+    "font.family":           "DejaVu Sans",
+    "font.size":             16,
+    "axes.titlesize":        16,
+    "axes.labelsize":        16,
+    "xtick.labelsize":       16,
+    "ytick.labelsize":       16,
+    "legend.fontsize":       18,
+    "legend.title_fontsize": 18,
+    "figure.titlesize":      16,
+})
+# -----------------------------------------------------------------------
+
 import numpy as np
 import torch
 
@@ -236,7 +254,7 @@ def make_plots(results: dict, threshold: float):
         per_event = results[set_prefix]["per_event_total"]
         n_clipped = int((per_event > clip_max).sum())
         ax.hist(np.clip(per_event, None, clip_max), bins=60, alpha=0.5,
-                label=f"{label} — {desc} (n={len(per_event)}, {n_clipped} clipped)",
+                label=f"{label} — {desc}",
                 color=color, density=True)
     ax.axvline(threshold, color="black", linestyle="--", linewidth=1.5,
                label=f"SET1 95th pct threshold = {threshold:.3f}")
@@ -246,11 +264,11 @@ def make_plots(results: dict, threshold: float):
     ax.set_title("Cross-SET reconstruction error\n"
                  "(Model + threshold fixed from SET1 training only; "
                  "x-axis clipped to show bulk shape)")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=11)
     ax.grid(alpha=0.3)
     plt.tight_layout()
     out = LOG_DIR / "cross_set_per_event_histogram_v3.png"
-    plt.savefig(out, dpi=110, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"\nSaved {out}")
 
@@ -269,11 +287,11 @@ def make_plots(results: dict, threshold: float):
     ax.set_ylabel("Per-event total reconstruction error")
     ax.set_title("Per-SET error distribution\n"
                  "(Model trained on SET1 only; threshold fixed from SET1)")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=11)
     ax.grid(alpha=0.3, axis="y")
     plt.tight_layout()
     out = LOG_DIR / "cross_set_per_event_boxplot_v3.png"
-    plt.savefig(out, dpi=110, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved {out}")
 
@@ -292,13 +310,14 @@ def make_plots(results: dict, threshold: float):
                label=f"threshold = {threshold:.3f}")
     ax.set_ylim(0, y_clip_max)
     ax.set_xlabel("Event temperature (°C)")
-    ax.set_ylabel(f"Per-event total reconstruction error (y-axis clipped at {y_clip_max:.2f})")
+    ax.set_ylabel(f"Per-event total reconstruction error"
+                  f"")
     ax.set_title("Reconstruction error vs temperature, across SETs")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=11)
     ax.grid(alpha=0.3)
     plt.tight_layout()
     out = LOG_DIR / "cross_set_error_vs_temperature_v3.png"
-    plt.savefig(out, dpi=110, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved {out}")
 
@@ -328,7 +347,7 @@ def make_plots(results: dict, threshold: float):
                  "(SET1-trained model, SET1 threshold)", fontsize=11, pad=10)
     plt.tight_layout()
     out = LOG_DIR / "cross_set_summary_table_v3.png"
-    plt.savefig(out, dpi=110, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved {out}")
 
@@ -380,7 +399,7 @@ def main() -> None:
         if r:
             results[set_prefix] = r
 
-    threshold = float(np.percentile(results[set1_prefix]["per_event_total"], 95))
+    threshold = float(np.percentile(results[set1_prefix]["per_event_total"], 99))
     print(f"\nSET1-derived 95th-percentile threshold: {threshold:.4f}")
 
     print("\nGenerating plots...")

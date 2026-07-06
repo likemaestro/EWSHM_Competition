@@ -31,6 +31,24 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+# -----------------------------------------------------------------------
+# Typography per team specification
+# font: Helvetica/DejaVu Sans, title 6pt, legend 4.7pt, axis labels 5.5pt
+# -----------------------------------------------------------------------
+import matplotlib
+matplotlib.rcParams.update({
+    "font.family":           "DejaVu Sans",
+    "font.size":             16,
+    "axes.titlesize":        16,
+    "axes.labelsize":        16,
+    "xtick.labelsize":       16,
+    "ytick.labelsize":       16,
+    "legend.fontsize":       18,
+    "legend.title_fontsize": 18,
+    "figure.titlesize":      16,
+})
+# -----------------------------------------------------------------------
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -249,7 +267,7 @@ def main() -> None:
     fig.suptitle("Architecture 1 v3 training curves (NEW deck, bottleneck=256)", y=1.01)
     plt.tight_layout()
     out_png = LOG_DIR / "training_curves_v3.png"
-    plt.savefig(out_png, dpi=110, bbox_inches="tight")
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
     print(f"Saved training curves to {out_png}")
 
     print("\nDone.")

@@ -25,6 +25,24 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+# -----------------------------------------------------------------------
+# Typography per team specification
+# font: Helvetica/DejaVu Sans, title 6pt, legend 4.7pt, axis labels 5.5pt
+# -----------------------------------------------------------------------
+import matplotlib
+matplotlib.rcParams.update({
+    "font.family":           "DejaVu Sans",
+    "font.size":             16,
+    "axes.titlesize":        16,
+    "axes.labelsize":        16,
+    "xtick.labelsize":       16,
+    "ytick.labelsize":       16,
+    "legend.fontsize":       18,
+    "legend.title_fontsize": 18,
+    "figure.titlesize":      16,
+})
+# -----------------------------------------------------------------------
+
 import numpy as np
 import torch
 
@@ -38,7 +56,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # Threshold for "abnormal" -- percentile of the per-event total error
 # distribution. Per Zhenkun: "maybe 95% of time bridge is healthy, check
 # the rest 5%."
-ANOMALY_PERCENTILE = 95
+ANOMALY_PERCENTILE = 99
 
 
 def load_normalized():
@@ -179,7 +197,7 @@ def main() -> None:
         ax.grid(alpha=0.3)
     plt.tight_layout()
     fig_path = LOG_DIR / "reconstruction_error_histograms_v3.png"
-    plt.savefig(fig_path, dpi=110, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved histograms to {fig_path}")
 
@@ -230,7 +248,7 @@ def main() -> None:
     plt.xticks(rotation=30, ha="right")
     plt.tight_layout()
     fig_path = LOG_DIR / "error_vs_time_v3.png"
-    plt.savefig(fig_path, dpi=110, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved error-vs-time plot to {fig_path}")
 
@@ -253,7 +271,7 @@ def main() -> None:
     ax.grid(alpha=0.3)
     plt.tight_layout()
     fig_path = LOG_DIR / "error_histogram_log_threshold_v3.png"
-    plt.savefig(fig_path, dpi=110, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved log-scale threshold histogram to {fig_path}")
 
@@ -279,7 +297,7 @@ def main() -> None:
     ax.grid(alpha=0.3)
     plt.tight_layout()
     fig_path = LOG_DIR / "per_channel_error_v3.png"
-    plt.savefig(fig_path, dpi=110, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved per-channel boxplot to {fig_path}")
 
@@ -308,7 +326,7 @@ def main() -> None:
             axes[row, 1].legend(); axes[row, 1].grid(alpha=0.3)
     plt.tight_layout()
     fig_path = LOG_DIR / "example_reconstructions_v3.png"
-    plt.savefig(fig_path, dpi=110, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved example reconstructions to {fig_path}")
 

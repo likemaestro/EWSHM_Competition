@@ -25,6 +25,25 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+# -----------------------------------------------------------------------
+# Typography per team specification
+# font: Helvetica/DejaVu Sans, title 6pt, legend 4.7pt, axis labels 5.5pt
+# -----------------------------------------------------------------------
+import matplotlib
+matplotlib.rcParams.update({
+    "font.family":           "DejaVu Sans",
+    "font.size":             16,
+    "axes.titlesize":        16,
+    "axes.labelsize":        16,
+    "xtick.labelsize":       16,
+    "ytick.labelsize":       16,
+    "legend.fontsize":       12,
+    "legend.title_fontsize": 12,
+    "figure.titlesize":      16,
+})
+import matplotlib.pyplot as plt
+# -----------------------------------------------------------------------
+
 import numpy as np
 import torch
 
@@ -120,15 +139,15 @@ def main() -> None:
         axes[1].plot(a_event[:, ch], label=f"ch{ch}", alpha=0.7)
     axes[0].set_title(f"Raw strain, all 8 channels — {TARGET_EVENT_ID}\nT={t_event:.1f}°C")
     axes[0].set_xlabel("time sample")
-    axes[0].legend(fontsize=7, ncol=4)
+    axes[0].legend(ncol=4)
     axes[0].grid(alpha=0.3)
     axes[1].set_title("Raw ACC FFT magnitude, all 8 channels")
     axes[1].set_xlabel("frequency bin")
-    axes[1].legend(fontsize=7, ncol=4)
+    axes[1].legend(ncol=4)
     axes[1].grid(alpha=0.3)
     plt.tight_layout()
     out = LOG_DIR / "outlier_event_raw_signals.png"
-    plt.savefig(out, dpi=110, bbox_inches="tight")
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"\nSaved raw signal plot to {out}")
 
@@ -200,7 +219,7 @@ def main() -> None:
                  f"(worst channel: ch{worst_ch})", y=1.005)
     plt.tight_layout()
     out_path = LOG_DIR / "outlier_event_reconstruction_all_channels.png"
-    plt.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"\nSaved reconstruction comparison to {out_path}")
 
